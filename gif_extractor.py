@@ -4,7 +4,15 @@ from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, QUrl
-from PyQt6.QtGui import QBrush, QKeyEvent, QMouseEvent, QPainter, QPen
+from PyQt6.QtGui import (
+    QBrush,
+    QCloseEvent,
+    QKeyEvent,
+    QMouseEvent,
+    QPainter,
+    QPen,
+    QPaintEvent,
+)
 from PyQt6.QtMultimedia import QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtWidgets import (
@@ -19,30 +27,36 @@ from PyQt6.QtWidgets import (
 )
 
 
-def parseArgs():
+def parseArgs() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("videoPath", type=str, nargs="?")
     return parser.parse_args()
 
 
 class Overlay(QWidget):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.setStyleSheet("background: red;")
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         self.startPos: Optional[QPoint] = None
         self.endPos: Optional[QPoint] = None
 
-    def paintEvent(self, _):
+    def paintEvent(self, a0: Optional[QPaintEvent]):
+        del a0
         if self.startPos is None or self.endPos is None:
             return
 
-        print("PAINTING")
-        x1, x2 = min(self.startPos.x(), self.endPos.x()), max(self.startPos.x(), self.endPos.x())
-        y1, y2 = min(self.startPos.y(), self.endPos.y()), max(self.startPos.y(), self.endPos.y())
+        x1 = min(self.startPos.x(), self.endPos.x()) - 10
+        x2 = max(self.startPos.x(), self.endPos.x()) - 10
+        y1 = min(self.startPos.y(), self.endPos.y()) - 10
+        y2 = max(self.startPos.y(), self.endPos.y()) - 10
         selectionRect = QRect(QPoint(x1, y1), QPoint(x2, y2))
         painter = QPainter(self)
         painter.setPen(QPen(Qt.GlobalColor.red, 2))
@@ -52,21 +66,19 @@ class Overlay(QWidget):
 
 
 class VideoPlayer(QMainWindow):
-    def __init__(self, videoPath):
+    def __init__(self, videoPath) -> None:
         super().__init__()
 
         self.setWindowTitle("MP4 to GIF Extractor")
+        self.setGeometry(100, 100, 800, 600)
         self.showMaximized()
 
         self.mediaPlayer = QMediaPlayer(self)
         self.videoWidget = QVideoWidget(self)
         self.mediaPlayer.setVideoOutput(self.videoWidget)
 
-        # Overlay for drawing
-        # self.overlay = Overlay(self)
-        self.overlay = Overlay(self.videoWidget)
-        self.overlay.setGeometry(self.videoWidget.geometry())
-        self.overlay.raise_()
+        # # Overlay for drawing
+        self.overlay = Overlay()
         self.overlay.show()
 
         self.startFrame = None
@@ -80,7 +92,7 @@ class VideoPlayer(QMainWindow):
         self.initUi()
         self.loadVideo(videoPath)
 
-    def initUi(self):
+    def initUi(self) -> None:
         # Main layout
         centralWidget = QWidget(self)
         layout = QVBoxLayout()
@@ -89,8 +101,6 @@ class VideoPlayer(QMainWindow):
 
         # Video display
         layout.addWidget(self.videoWidget)
-        # layout.addWidget(self.overlay)
-        self.overlay.setGeometry(self.videoWidget.geometry())
 
         # Controls
         self.progressSlider = QSlider(Qt.Orientation.Horizontal, self)
@@ -122,18 +132,29 @@ class VideoPlayer(QMainWindow):
 
         layout.addWidget(controls)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, 'overlay'):
-            self.overlay.setGeometry(self.videoWidget.geometry())
+    def setOverlayPos(self) -> None:
+        if hasattr(self, "overlay"):
+            videoWidgetGeometry = self.videoWidget.geometry()
+            globalPos = self.videoWidget.mapToGlobal(
+                videoWidgetGeometry.topLeft() - QPoint(10, 10)
+            )
+            self.overlay.setGeometry(QRect(globalPos, videoWidgetGeometry.size()))
 
-    def openVideo(self):
+    def resizeEvent(self, a0) -> None:
+        super().resizeEvent(a0)
+        self.setOverlayPos()
+
+    def moveEvent(self, a0) -> None:
+        super().moveEvent(a0)
+        self.setOverlayPos()
+
+    def openVideo(self) -> None:
         filePath, _ = QFileDialog.getOpenFileName(
             self, "Open Video", "", "Video Files (*.mp4 *.avi *.mkv)"
         )
         self.loadVideo(filePath)
 
-    def loadVideo(self, filePath):
+    def loadVideo(self, filePath) -> None:
         if not filePath:
             return
         if not Path(filePath).is_file():
@@ -142,15 +163,15 @@ class VideoPlayer(QMainWindow):
         self.mediaPlayer.play()
         self.timer.start()
 
-    def markStartFrame(self):
+    def markStartFrame(self) -> None:
         self.startFrame = self.mediaPlayer.position()
         self.statusLabel.setText(f"Start frame marked at {self.startFrame} ms")
 
-    def markEndFrame(self):
+    def markEndFrame(self) -> None:
         self.endFrame = self.mediaPlayer.position()
         self.statusLabel.setText(f"End frame marked at {self.endFrame} ms")
 
-    def extractGif(self):
+    def extractGif(self) -> None:
         pass
         # if (
         #     self.startFrame is not None
@@ -163,28 +184,30 @@ class VideoPlayer(QMainWindow):
         # else:
         #     self.statusLabel.setText("Please mark start and end frames, and crop area.")
 
-    def seekVideo(self):
+    def seekVideo(self) -> None:
         newPosition = int(
             self.progressSlider.value() / 1000 * self.mediaPlayer.duration()
         )
         self.mediaPlayer.setPosition(newPosition)
 
-    def updateProgressBar(self):
+    def updateProgressBar(self) -> None:
         if self.mediaPlayer.duration() <= 0:
             return
         progress = self.mediaPlayer.position() / self.mediaPlayer.duration() * 1000
         self.progressSlider.setValue(int(progress))
 
-    def keyPressEvent(self, event: QKeyEvent):
-        key = event.key()
+    def keyPressEvent(self, a0: Optional[QKeyEvent]) -> None:
+        if not a0:
+            return
+        key = a0.key()
 
-        if key == Qt.Key.Key_O and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+        if key == Qt.Key.Key_O and a0.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.openVideo()
         elif key in {Qt.Key.Key_H, Qt.Key.Key_L}:
             sign = 1 if key == Qt.Key.Key_L else -1
-            if event.modifiers() & Qt.KeyboardModifier.AltModifier:
+            if a0.modifiers() & Qt.KeyboardModifier.AltModifier:
                 delay = 100
-            elif event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
+            elif a0.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                 delay = 1000
             else:
                 delay = 3000
@@ -197,30 +220,30 @@ class VideoPlayer(QMainWindow):
             self.stepFrame(1)
         elif key == Qt.Key.Key_Comma:
             self.stepFrame(-1)
-        elif event.text().isdigit():
-            self.seekPercent(int(event.text()))
+        elif a0.text().isdigit():
+            self.seekPercent(int(a0.text()))
         elif key in {Qt.Key.Key_K, Qt.Key.Key_Space}:
             self.togglePlayback()
         elif key == Qt.Key.Key_Q:
             self.close()
 
-    def togglePlayback(self):
+    def togglePlayback(self) -> None:
         if self.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.mediaPlayer.pause()
         else:
             self.mediaPlayer.play()
 
-    def seekRelative(self, milliseconds):
+    def seekRelative(self, milliseconds) -> None:
         newPosition = self.mediaPlayer.position() + milliseconds
         self.mediaPlayer.setPosition(
             max(0, min(newPosition, self.mediaPlayer.duration()))
         )
 
-    def seekPercent(self, percent):
+    def seekPercent(self, percent) -> None:
         newPosition = int(self.mediaPlayer.duration() * percent / 10)
         self.mediaPlayer.setPosition(newPosition)
 
-    def changePlaybackSpeed(self, direction):
+    def changePlaybackSpeed(self, direction) -> None:
         self.currentSpeedIndex = max(
             0, min(self.currentSpeedIndex + direction, len(self.playbackSpeeds) - 1)
         )
@@ -229,27 +252,30 @@ class VideoPlayer(QMainWindow):
             f"Playback Speed: x{self.playbackSpeeds[self.currentSpeedIndex]}"
         )
 
-    def stepFrame(self, direction):
+    def stepFrame(self, direction) -> None:
         self.mediaPlayer.pause()
         currentPosition = self.mediaPlayer.position()
         frameDuration = 1000 // 30  # Assuming 30 FPS
         self.mediaPlayer.setPosition(int(currentPosition + direction * frameDuration))
 
-    def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.overlay.startPos = event.pos() - self.overlay.pos()
+    def mousePressEvent(self, a0: Optional[QMouseEvent]) -> None:
+        if a0 and a0.button() == Qt.MouseButton.LeftButton:
+            if not self.videoWidget.geometry().contains(a0.pos()):
+                return
+            self.overlay.startPos = a0.pos()
+            self.overlay.endPos = None
             self.overlay.update()
 
-    def mouseMoveEvent(self, event: QMouseEvent):
-        if not self.overlay.geometry().contains(event.pos()):
+    def mouseMoveEvent(self, a0: Optional[QMouseEvent]) -> None:
+        if not a0 or not self.videoWidget.geometry().contains(a0.pos()):
             return
-
-        self.overlay.endPos = event.pos() - self.overlay.pos()
+        self.overlay.endPos = a0.pos()
         self.overlay.update()
 
-    def mouseReleaseEvent(self, event: QMouseEvent):
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.overlay.update()
+    def closeEvent(self, a0: Optional[QCloseEvent]) -> None:
+        self.overlay.close()
+        if a0:
+            a0.accept()
 
 
 if __name__ == "__main__":
