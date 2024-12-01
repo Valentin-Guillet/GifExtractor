@@ -9,7 +9,17 @@ import sys
 from pathlib import Path
 from typing import Optional, cast
 
-from PyQt6.QtCore import QObject, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import (
+    QObject,
+    QPoint,
+    QRect,
+    QSize,
+    Qt,
+    QThread,
+    QTimer,
+    QUrl,
+    pyqtSignal,
+)
 from PyQt6.QtGui import (
     QBrush,
     QCloseEvent,
@@ -373,6 +383,62 @@ class VideoPlayer(QMainWindow):
         self.videoAspectRatio = self.videoWidth / self.videoHeight
         self.setSelectOverlayPos()
 
+    def updateProgressBar(self) -> None:
+        if self.mediaPlayer.duration() <= 0:
+            return
+        progress = self.mediaPlayer.position() / self.mediaPlayer.duration() * 1000
+        self.progressSlider.setValue(int(progress))
+        self.currTimeLabel.setText(format_time(self.mediaPlayer.position() // 1000))
+
+    def togglePlayback(self) -> None:
+        if self.mediaPlayer.mediaStatus() == QMediaPlayer.MediaStatus.NoMedia:
+            return
+
+        if self.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
+            self.mediaPlayer.pause()
+            self.playButton.setIcon(QIcon.fromTheme("media-playback-start"))
+        else:
+            self.mediaPlayer.play()
+            self.playButton.setIcon(QIcon.fromTheme("media-playback-pause"))
+
+    def stopPlayback(self) -> None:
+        self.mediaPlayer.stop()
+        self.playButton.setIcon(QIcon.fromTheme("media-playback-start"))
+        self.selectionWindow.hide()
+        self.selectionWindow.clearSelection()
+        self.previewWindow.stop()
+        self.previewWindow.hide()
+        self.startGifTime = None
+        self.endGifTime = None
+        self.statusLabel.setText("")
+
+    def seekVideo(self) -> None:
+        newPosition = self.progressSlider.value() * self.mediaPlayer.duration() // 1000
+        self.mediaPlayer.setPosition(newPosition)
+
+    def seekRelative(self, milliseconds: int) -> None:
+        newPosition = self.mediaPlayer.position() + milliseconds
+        newPosition = max(0, min(newPosition, self.mediaPlayer.duration()))
+        self.mediaPlayer.setPosition(newPosition)
+
+    def seekPercent(self, percent: int) -> None:
+        newPosition = int(self.mediaPlayer.duration() * percent / 10)
+        self.mediaPlayer.setPosition(newPosition)
+
+    def changePlaybackSpeed(self, direction: int) -> None:
+        if not (0 <= self.currentSpeedIndex + direction < len(self.playbackSpeeds)):
+            return
+
+        self.currentSpeedIndex += direction
+        self.mediaPlayer.setPlaybackRate(self.playbackSpeeds[self.currentSpeedIndex])
+        self.speedLabel.setText(f"[x{self.playbackSpeeds[self.currentSpeedIndex]}]")
+
+    def stepFrame(self, direction: int) -> None:
+        self.mediaPlayer.pause()
+        currentPosition = self.mediaPlayer.position()
+        frameDuration = 1000 // 30  # Assuming 30 FPS
+        self.mediaPlayer.setPosition(int(currentPosition + direction * frameDuration))
+
     def markStartFrame(self) -> None:
         if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
             self.statusLabel.setText("Mark start frame")
@@ -455,17 +521,6 @@ class VideoPlayer(QMainWindow):
         else:
             self.statusLabel.setText("No clip selected")
 
-    def seekVideo(self) -> None:
-        newPosition = self.progressSlider.value() * self.mediaPlayer.duration() // 1000
-        self.mediaPlayer.setPosition(newPosition)
-
-    def updateProgressBar(self) -> None:
-        if self.mediaPlayer.duration() <= 0:
-            return
-        progress = self.mediaPlayer.position() / self.mediaPlayer.duration() * 1000
-        self.progressSlider.setValue(int(progress))
-        self.currTimeLabel.setText(format_time(self.mediaPlayer.position() // 1000))
-
     def keyPressEvent(self, a0: Optional[QKeyEvent]) -> None:
         if not a0:
             return
@@ -509,52 +564,6 @@ class VideoPlayer(QMainWindow):
             self.setPreviewPos()
         elif key == Qt.Key.Key_Q:
             self.close()
-
-    def togglePlayback(self) -> None:
-        if self.mediaPlayer.mediaStatus() == QMediaPlayer.MediaStatus.NoMedia:
-            return
-
-        if self.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
-            self.mediaPlayer.pause()
-            self.playButton.setIcon(QIcon.fromTheme("media-playback-start"))
-        else:
-            self.mediaPlayer.play()
-            self.playButton.setIcon(QIcon.fromTheme("media-playback-pause"))
-
-    def stopPlayback(self) -> None:
-        self.mediaPlayer.stop()
-        self.playButton.setIcon(QIcon.fromTheme("media-playback-start"))
-        self.selectionWindow.hide()
-        self.selectionWindow.clearSelection()
-        self.previewWindow.stop()
-        self.previewWindow.hide()
-        self.startGifTime = None
-        self.endGifTime = None
-        self.statusLabel.setText("")
-
-    def seekRelative(self, milliseconds: int) -> None:
-        newPosition = self.mediaPlayer.position() + milliseconds
-        self.mediaPlayer.setPosition(
-            max(0, min(newPosition, self.mediaPlayer.duration()))
-        )
-
-    def seekPercent(self, percent: int) -> None:
-        newPosition = int(self.mediaPlayer.duration() * percent / 10)
-        self.mediaPlayer.setPosition(newPosition)
-
-    def changePlaybackSpeed(self, direction: int) -> None:
-        if not (0 <= self.currentSpeedIndex + direction < len(self.playbackSpeeds)):
-            return
-
-        self.currentSpeedIndex += direction
-        self.mediaPlayer.setPlaybackRate(self.playbackSpeeds[self.currentSpeedIndex])
-        self.speedLabel.setText(f"[x{self.playbackSpeeds[self.currentSpeedIndex]}]")
-
-    def stepFrame(self, direction: int) -> None:
-        self.mediaPlayer.pause()
-        currentPosition = self.mediaPlayer.position()
-        frameDuration = 1000 // 30  # Assuming 30 FPS
-        self.mediaPlayer.setPosition(int(currentPosition + direction * frameDuration))
 
     def mousePressEvent(self, a0: Optional[QMouseEvent]) -> None:
         if a0 and a0.button() == Qt.MouseButton.LeftButton:
