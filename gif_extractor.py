@@ -1,7 +1,6 @@
-# TODO: `c` to clear selection
-# TODO: `<C-l>` to clear selection, reset preview pos and hide it
 # TODO: draw previous selection in light green
-# TODO: window that recap all keybindings
+# TODO: document code
+# TODO: bind `?` to window that recap all keybindings
 
 import argparse
 import subprocess
@@ -630,6 +629,13 @@ class VideoPlayer(QMainWindow):
 
         if key == Qt.Key.Key_O and a0.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.openVideo()
+
+        elif key == Qt.Key.Key_L and a0.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.selectionWindow.clearSelection()
+            self.previewAnchor = None
+            self.setPreviewPos()
+            self.previewWindow.hide()
+
         elif key in {Qt.Key.Key_H, Qt.Key.Key_L}:
             sign = 1 if key == Qt.Key.Key_L else -1
             if a0.modifiers() & Qt.KeyboardModifier.AltModifier:
@@ -639,37 +645,56 @@ class VideoPlayer(QMainWindow):
             else:
                 delay = 3000
             self.seekRelative(sign * delay)
+
         elif key == Qt.Key.Key_Greater:
             self.changePlaybackSpeed(1)
+
         elif key == Qt.Key.Key_Less:
             self.changePlaybackSpeed(-1)
+
         elif key == Qt.Key.Key_Period:
             self.stepFrame(1)
+
         elif key == Qt.Key.Key_Comma:
             self.stepFrame(-1)
+
         elif a0.text().isdigit():
             self.seekPercent(int(a0.text()))
+
         elif key in {Qt.Key.Key_K, Qt.Key.Key_Space}:
             self.togglePlayback()
+
         elif key == Qt.Key.Key_Escape:
             self.stopPlayback()
+
         elif key == Qt.Key.Key_S:
             self.markStartFrame()
+
         elif key == Qt.Key.Key_E:
             self.markEndFrame()
+
         elif key == Qt.Key.Key_A:
             self.gotoStartFrame()
+
         elif key == Qt.Key.Key_D:
             self.gotoEndFrame()
+
         elif key == Qt.Key.Key_X:
             self.extractGif()
+
         elif key == Qt.Key.Key_G:
             self.saveGif()
+
+        elif key == Qt.Key.Key_P:
+            self.previewWindow.toggle()
+
+        elif key == Qt.Key.Key_C:
+            self.selectionWindow.clearSelection()
+
         elif key == Qt.Key.Key_R:
             self.previewAnchor = None
             self.setPreviewPos()
-        elif key == Qt.Key.Key_P:
-            self.previewWindow.toggle()
+
         elif key == Qt.Key.Key_Q:
             self.close()
 
