@@ -1,5 +1,3 @@
-# TODO: fix gif extraction
-# TODO: hide selection rectangle when main window not visible
 # TODO: add preview window
 # TODO: add tick to progress bar when setting startFrame and endFrame
 # TODO: keybinding to go to startFrame and endFrame
@@ -63,11 +61,7 @@ class SelectionWindow(QWidget):
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint
-            | Qt.WindowType.WindowStaysOnTopHint
-            | Qt.WindowType.Tool
-        )
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
 
         self.startPos: Optional[QPoint] = None
@@ -161,7 +155,7 @@ class VideoPlayer(QMainWindow):
         self.extractWorker: Optional[FFmpegWorker] = None
 
         # Overlays for selection and preview
-        self.selectionWindow = SelectionWindow()
+        self.selectionWindow = SelectionWindow(self)
 
 
         self.startGifTime = None
@@ -260,7 +254,7 @@ class VideoPlayer(QMainWindow):
         self.videoTrueGeometry = QRect(xOffset, yOffset, scaledWidth, scaledHeight)
 
     def setOverlaysPos(self) -> None:
-        if not hasattr(self, "videoAspectRatio"):
+        if not hasattr(self, "isLoaded") or not self.isLoaded:
             return
 
         self.updateBlackBars()
