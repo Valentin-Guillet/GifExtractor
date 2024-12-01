@@ -1,7 +1,9 @@
 # TODO: fix gif extraction
 # TODO: hide selection rectangle when main window not visible
+# TODO: add preview window
 # TODO: add tick to progress bar when setting startFrame and endFrame
 # TODO: keybinding to go to startFrame and endFrame
+# TODO: `c` or `<C-L>` to clear selection
 # TODO: window that recap all keybindings
 
 import argparse
@@ -344,8 +346,15 @@ class VideoPlayer(QMainWindow):
         if self.startGifTime is None or self.endGifTime is None or sel is None:
             return None
 
+        widthRatio = self.videoWidth / self.videoTrueGeometry.width()
+        heightRatio = self.videoHeight / self.videoTrueGeometry.height()
+        x = int(sel.x() * widthRatio)
+        y = int(sel.y() * heightRatio)
+        w = int(sel.width() * widthRatio)
+        h = int(sel.height() * heightRatio)
+
         filePath = self.mediaPlayer.source().path()
-        cropStr = f"{sel.width()}:{sel.height()}:{sel.x()}:{sel.y()}"
+        cropStr = f"{w}:{h}:{x}:{y}"
         startTimeStr = f"{format_time(self.startGifTime // 1000)}.{self.startGifTime % 1000}"
         clipLength = self.endGifTime - self.startGifTime
         endTimeStr = f"{format_time(clipLength // 1000)}.{clipLength % 1000}"
@@ -377,6 +386,9 @@ class VideoPlayer(QMainWindow):
 
     def saveGif(self) -> None:
         filePath, _ = QFileDialog.getSaveFileName(self, "Save File", "", "Gif Files (*.gif)")
+        if not filePath:
+            return
+
         if not filePath.endswith(".gif"):
             filePath += ".gif"
         if self.tmpFileName.exists():
