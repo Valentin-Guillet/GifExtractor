@@ -143,6 +143,17 @@ class PreviewWindow(QWidget):
         frame = self.movie.currentPixmap()
         return frame.width(), frame.height()
 
+    def toggle(self) -> None:
+        if self.movie is None:
+            return
+
+        if self.isVisible():
+            self.movie.stop()
+            self.hide()
+        else:
+            self.movie.start()
+            self.show()
+
     def stop(self) -> None:
         if self.movie is not None:
             self.movie.stop()
@@ -562,6 +573,8 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key.Key_R:
             self.previewAnchor = None
             self.setPreviewPos()
+        elif key == Qt.Key.Key_P:
+            self.previewWindow.toggle()
         elif key == Qt.Key.Key_Q:
             self.close()
 
