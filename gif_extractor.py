@@ -1,7 +1,6 @@
-# TODO: add preview window
 # TODO: add tick to progress bar when setting startFrame and endFrame
 # TODO: keybinding to go to startFrame and endFrame
-# TODO: `c` or `<C-L>` to clear selection
+# TODO: `c` or `<C-L>` to clear selection OR `p` to toggle preview
 # TODO: window that recap all keybindings
 
 import argparse
@@ -10,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import Optional, cast
 
-from PyQt6.QtCore import QObject, QPoint, QRect, Qt, QThread, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QObject, QPoint, QRect, QSize, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QCloseEvent,
@@ -20,6 +19,7 @@ from PyQt6.QtGui import (
     QKeyEvent,
     QMouseEvent,
     QMoveEvent,
+    QMovie,
     QPainter,
     QPen,
     QPaintEvent,
@@ -57,7 +57,7 @@ def format_time(seconds: int) -> str:
 
 
 class SelectionWindow(QWidget):
-    def __init__(self, parent=None) -> None:
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
@@ -98,6 +98,45 @@ class SelectionWindow(QWidget):
         self.startPos = None
         self.endPos = None
         self.update()
+
+
+class PreviewWindow(QWidget):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+
+        self.label = QLabel(self)
+        self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.resize(self.size())
+        self.label.setScaledContents(True)
+        self.movie: Optional[QMovie] = None
+
+    def resizeEvent(self, a0: Optional[QResizeEvent]) -> None:
+        self.label.resize(self.size())
+        if a0:
+            a0.accept()
+
+    def hasMedia(self) -> bool:
+        return self.movie is not None
+
+    def load(self, path: str) -> None:
+        self.stop()
+        self.movie = QMovie(path)
+        self.label.setMovie(self.movie)
+        self.movie.start()
+
+    def getSize(self) -> tuple[int, int]:
+        if self.movie is None:
+            return (-1, -1)
+        frame = self.movie.currentPixmap()
+        return frame.width(), frame.height()
+
+    def stop(self) -> None:
+        if self.movie is not None:
+            self.movie.stop()
+            self.movie = None
 
 
 class FFmpegWorker(QObject):
@@ -156,7 +195,9 @@ class VideoPlayer(QMainWindow):
 
         # Overlays for selection and preview
         self.selectionWindow = SelectionWindow(self)
-
+        self.previewWindow = PreviewWindow(self)
+        self.previewAnchor: Optional[QPoint] = None
+        self.clickOnPreview: Optional[QPoint] = None
 
         self.startGifTime = None
         self.endGifTime = None
@@ -253,7 +294,7 @@ class VideoPlayer(QMainWindow):
 
         self.videoTrueGeometry = QRect(xOffset, yOffset, scaledWidth, scaledHeight)
 
-    def setOverlaysPos(self) -> None:
+    def setSelectOverlayPos(self) -> None:
         if not hasattr(self, "isLoaded") or not self.isLoaded:
             return
 
@@ -261,6 +302,29 @@ class VideoPlayer(QMainWindow):
         globalPos = self.videoWidget.mapToGlobal(self.videoTrueGeometry.topLeft())
         self.selectionWindow.setGeometry(QRect(globalPos, self.videoTrueGeometry.size()))
         self.selectionWindow.show()
+
+    def setPreviewPos(self):
+        if not hasattr(self, "previewWindow") or not self.previewWindow.hasMedia():
+            return
+
+        gifWidth, gifHeight = self.previewWindow.getSize()
+        maxWidth, maxHeight = self.widgetWidth // 3, self.widgetHeight // 3
+        if gifWidth / gifHeight > maxWidth / maxHeight:
+            previewWidth = min(gifWidth, maxWidth)
+            previewHeight = previewWidth * gifHeight // gifWidth
+        else:
+            previewHeight = min(gifHeight, maxHeight)
+            previewWidth = previewHeight * gifWidth // gifHeight
+
+        if self.previewAnchor is not None:
+            pos = self.previewAnchor
+        else:
+            pos = QPoint(self.videoTrueGeometry.right() - previewWidth, self.videoTrueGeometry.top())
+
+        self.previewTrueGeometry = QRect(pos, QSize(previewWidth, previewHeight))
+        globalPos = self.videoWidget.mapToGlobal(pos)
+        self.previewWindow.setGeometry(QRect(globalPos, QSize(previewWidth, previewHeight)))
+        self.previewWindow.show()
 
     def resizeEvent(self, a0: Optional[QResizeEvent]) -> None:
         super().resizeEvent(a0)
@@ -270,11 +334,13 @@ class VideoPlayer(QMainWindow):
         self.widgetWidth = self.videoWidget.width()
         self.widgetHeight = self.videoWidget.height()
         self.widgetAspectRatio = self.widgetWidth / self.widgetHeight
-        self.setOverlaysPos()
+        self.setSelectOverlayPos()
+        self.setPreviewPos()
 
     def moveEvent(self, a0: Optional[QMoveEvent]) -> None:
         super().moveEvent(a0)
-        self.setOverlaysPos()
+        self.setSelectOverlayPos()
+        self.setPreviewPos()
 
     def openVideo(self) -> None:
         filePath, _ = QFileDialog.getOpenFileName(
@@ -289,7 +355,7 @@ class VideoPlayer(QMainWindow):
             return
 
         if not Path(filePath).is_file():
-            print(f"No such file {filePath}")
+            self.statusLabel.setText(f"No such file {filePath}")
         self.mediaPlayer.setSource(QUrl.fromLocalFile(str(filePath)))
         self.statusLabel.setText("Loading media...")
 
@@ -305,7 +371,7 @@ class VideoPlayer(QMainWindow):
         self.videoWidth = self.mediaPlayer.metaData().value(QMediaMetaData.Key.Resolution).width()
         self.videoHeight = self.mediaPlayer.metaData().value(QMediaMetaData.Key.Resolution).height()
         self.videoAspectRatio = self.videoWidth / self.videoHeight
-        self.setOverlaysPos()
+        self.setSelectOverlayPos()
 
     def markStartFrame(self) -> None:
         if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
@@ -317,9 +383,6 @@ class VideoPlayer(QMainWindow):
             self.statusLabel.setText("Mark end frame")
             self.endGifTime = self.mediaPlayer.position()
             self.extractGif()
-
-    def setPreviewWindow(self) -> None:
-        print("SETTING PREVIEW")
 
     def onExtractStarted(self) -> None:
         self.statusLabel.setText("Extraction started!")
@@ -333,7 +396,8 @@ class VideoPlayer(QMainWindow):
             self.extractWorker = None
 
         if status:
-            self.setPreviewWindow()
+            self.previewWindow.load(str(self.tmpFileName))
+            self.setPreviewPos()
 
     def getExtractCmd(self) -> Optional[list[str]]:
         sel = self.selectionWindow.getRect()
@@ -440,6 +504,9 @@ class VideoPlayer(QMainWindow):
             self.extractGif()
         elif key == Qt.Key.Key_G:
             self.saveGif()
+        elif key == Qt.Key.Key_R:
+            self.previewAnchor = None
+            self.setPreviewPos()
         elif key == Qt.Key.Key_Q:
             self.close()
 
@@ -459,6 +526,8 @@ class VideoPlayer(QMainWindow):
         self.playButton.setIcon(QIcon.fromTheme("media-playback-start"))
         self.selectionWindow.hide()
         self.selectionWindow.clearSelection()
+        self.previewWindow.stop()
+        self.previewWindow.hide()
         self.startGifTime = None
         self.endGifTime = None
         self.statusLabel.setText("")
@@ -489,6 +558,10 @@ class VideoPlayer(QMainWindow):
 
     def mousePressEvent(self, a0: Optional[QMouseEvent]) -> None:
         if a0 and a0.button() == Qt.MouseButton.LeftButton:
+            if self.previewWindow.isVisible() and self.previewTrueGeometry.contains(a0.pos()):
+                self.clickOnPreview = a0.pos()
+                return
+
             if not self.videoTrueGeometry.contains(a0.pos()):
                 return
 
@@ -496,9 +569,23 @@ class VideoPlayer(QMainWindow):
             self.selectionWindow.startPos = clickPos
             self.selectionWindow.endPos = None
             self.selectionWindow.update()
+            self.previewWindow.hide()
 
     def mouseMoveEvent(self, a0: Optional[QMouseEvent]) -> None:
-        if not a0 or not self.videoTrueGeometry.contains(a0.pos()):
+        if not a0:
+            return
+
+        if (
+            self.clickOnPreview is not None
+            and self.previewWindow.isVisible()
+            and self.videoWidget.geometry().contains(a0.pos())
+        ):
+            self.previewAnchor = self.previewTrueGeometry.topLeft() + a0.pos() - self.clickOnPreview
+            self.clickOnPreview = a0.pos()
+            self.setPreviewPos()
+            return
+
+        if not self.videoTrueGeometry.contains(a0.pos()):
             return
 
         clickPos = a0.pos() - self.videoTrueGeometry.topLeft()
@@ -507,12 +594,17 @@ class VideoPlayer(QMainWindow):
 
     def mouseReleaseEvent(self, a0: Optional[QMouseEvent]) -> None:
         del a0
+        if self.clickOnPreview is not None:
+            self.clickOnPreview = None
+            return
+
         self.selectionWindow.update()
         self.extractGif()
 
     def closeEvent(self, a0: Optional[QCloseEvent]) -> None:
         self.tmpFileName.unlink(missing_ok=True)
         self.selectionWindow.close()
+        self.previewWindow.close()
         if self.extractWorker is not None:
             self.extractWorker.stop()
 
