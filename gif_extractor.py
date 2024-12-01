@@ -1,11 +1,16 @@
+# TODO: fix gif extraction
+# TODO: hide selection rectangle when main window not visible
+# TODO: add tick to progress bar when setting startFrame and endFrame
+# TODO: keybinding to go to startFrame and endFrame
+# TODO: window that recap all keybindings
+
 import argparse
 import subprocess
 import sys
-import threading
 from pathlib import Path
 from typing import Optional, cast
 
-from PyQt6.QtCore import QPoint, QRect, Qt, QTimer, QUrl
+from PyQt6.QtCore import QObject, QPoint, QRect, Qt, QThread, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QBrush,
     QCloseEvent,
@@ -20,7 +25,7 @@ from PyQt6.QtGui import (
     QPaintEvent,
     QResizeEvent,
 )
-from PyQt6.QtMultimedia import QMediaPlayer
+from PyQt6.QtMultimedia import QMediaMetaData, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtWidgets import (
     QApplication,
@@ -93,26 +98,68 @@ class SelectionWindow(QWidget):
     def isValid(self) -> bool:
         return self.startPos is not None and self.endPos is not None
 
+    def clearSelection(self) -> None:
+        self.startPos = None
+        self.endPos = None
+        self.update()
+
+
+class FFmpegWorker(QObject):
+    taskStarted = pyqtSignal()
+    taskFinished = pyqtSignal(bool, str)
+
+    def __init__(self, parent: Optional['QObject'] = None, cmd: Optional[list[str]] = None) -> None:
+        super().__init__(parent)
+        self.isRunning = False
+        self.extractCmd = cmd
+
+    def run(self) -> None:
+        if self.extractCmd is None:
+            return
+
+        self.taskStarted.emit()
+        self.isRunning = True
+        try:
+            self.process = subprocess.Popen(self.extractCmd, stderr=subprocess.DEVNULL)
+            self.process.wait()
+            self.isRunning = False
+            if self.process.returncode == 0:
+                self.taskFinished.emit(True, "Gif extracted!")
+            else:
+                self.taskFinished.emit(False, "Error in extraction process...")
+
+        except Exception as e:
+            self.isRunning = False
+            self.taskFinished.emit(False, f"Exception during process: {e}")
+
+    def stop(self) -> None:
+        if self.isRunning and self.process is not None:
+            self.process.terminate()
+            self.isRunning = False
+            self.taskFinished.emit(False, "Task was interrupted")
+
+
 class VideoPlayer(QMainWindow):
     def __init__(self, videoPath: Optional[str]) -> None:
         super().__init__()
-
-        self.isLoaded = False
-        self.tmpFileName = Path("/tmp/gif_extractor_tmpfile.gif")
-        self.extractProc: Optional[subprocess.Popen] = None
 
         self.setWindowTitle("MP4 to GIF Extractor")
         self.setGeometry(100, 100, 800, 600)
         self.showMaximized()
 
+        self.isLoaded = False
         self.mediaPlayer = QMediaPlayer(self)
         self.videoWidget = QVideoWidget(self)
         self.mediaPlayer.setVideoOutput(self.videoWidget)
         self.mediaPlayer.mediaStatusChanged[QMediaPlayer.MediaStatus].connect(self.mediaLoaded)
+        self.videoTrueGeometry = QRect()
 
-        # Overlay for selection and preview
+        self.tmpFileName = Path("/tmp/gif_extractor_tmpfile.gif")
+        self.extractThread = QThread()
+        self.extractWorker: Optional[FFmpegWorker] = None
+
+        # Overlays for selection and preview
         self.selectionWindow = SelectionWindow()
-        self.selectionWindow.show()
 
 
         self.startGifTime = None
@@ -137,85 +184,101 @@ class VideoPlayer(QMainWindow):
         self.videoWidget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout.addWidget(self.videoWidget)
 
-        # Controls
-        controls = QWidget(self)
-        controlLayout = QHBoxLayout(controls)
+        # Progress bar
+        progress = QWidget(self)
+        progressLayout = QHBoxLayout(progress)
 
-        self.openButton = QPushButton(QIcon.fromTheme("document-open"), None, self)
-        self.openButton.clicked.connect(self.openVideo)
-        self.openButton.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-        controlLayout.addWidget(self.openButton)
-
-        self.playButton = QPushButton(
-            QIcon.fromTheme("media-playback-start"), None, self
-        )
-        self.playButton.clicked.connect(self.togglePlayback)
-        self.playButton.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-        controlLayout.addWidget(self.playButton)
-
-        self.stopButton = QPushButton(
-            QIcon.fromTheme("media-playback-stop"), None, self
-        )
-        self.stopButton.clicked.connect(self.stopPlayback)
-        self.stopButton.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-        controlLayout.addWidget(self.stopButton)
-
-        self.startButton = QPushButton("Mark Start", self)
-        self.startButton.clicked.connect(self.markStartFrame)
-        self.startButton.setSizePolicy(
-            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
-        )
-        controlLayout.addWidget(self.startButton)
-
-        self.endButton = QPushButton("Mark End", self)
-        self.endButton.clicked.connect(self.markEndFrame)
-        self.endButton.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        controlLayout.addWidget(self.endButton)
-
-        self.extractButton = QPushButton("Extract", self)
-        self.extractButton.clicked.connect(self.extractGif)
-        self.endButton.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        controlLayout.addWidget(self.extractButton)
+        self.currTimeLabel = QLabel("00:00", self)
+        progressLayout.addWidget(self.currTimeLabel)
 
         self.speedLabel = QLabel("[x1]", self)
         self.speedLabel.setFixedWidth(45)
         self.speedLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        controlLayout.addWidget(self.speedLabel)
-
-        self.currTimeLabel = QLabel("00:00", self)
-        controlLayout.addWidget(self.currTimeLabel)
+        progressLayout.addWidget(self.speedLabel)
 
         self.progressSlider = QSlider(Qt.Orientation.Horizontal, self)
         self.progressSlider.setRange(0, 1000)
         self.progressSlider.sliderReleased.connect(self.seekVideo)
-        controlLayout.addWidget(self.progressSlider)
+        progressLayout.addWidget(self.progressSlider)
 
         self.totalTimeLabel = QLabel("00:00", self)
-        controlLayout.addWidget(self.totalTimeLabel)
+        progressLayout.addWidget(self.totalTimeLabel)
+
+        layout.addWidget(progress)
+
+        # Controls
+        controls = QWidget(self)
+        controls.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Minimum)
+        controlLayout = QHBoxLayout(controls)
+
+        self.openButton = QPushButton(QIcon.fromTheme("document-open"), None, self)
+        self.openButton.clicked.connect(self.openVideo)
+        controlLayout.addWidget(self.openButton)
+
+        self.playButton = QPushButton(QIcon.fromTheme("media-playback-start"), None, self)
+        self.playButton.clicked.connect(self.togglePlayback)
+        controlLayout.addWidget(self.playButton)
+
+        self.stopButton = QPushButton(QIcon.fromTheme("media-playback-stop"), None, self)
+        self.stopButton.clicked.connect(self.stopPlayback)
+        controlLayout.addWidget(self.stopButton)
+
+        self.startButton = QPushButton("Mark Start", self)
+        self.startButton.clicked.connect(self.markStartFrame)
+        controlLayout.addWidget(self.startButton)
+
+        self.endButton = QPushButton("Mark End", self)
+        self.endButton.clicked.connect(self.markEndFrame)
+        controlLayout.addWidget(self.endButton)
+
+        self.extractButton = QPushButton("Extract", self)
+        self.extractButton.clicked.connect(self.extractGif)
+        controlLayout.addWidget(self.extractButton)
+
+        self.statusLabel = QLabel(self)
+        controlLayout.addWidget(self.statusLabel)
 
         layout.addWidget(controls)
 
-    def setOverlayPos(self) -> None:
-        if hasattr(self, "selectionWindow"):
-            videoWidgetGeometry = self.videoWidget.geometry()
-            globalPos = self.videoWidget.mapToGlobal(
-                videoWidgetGeometry.topLeft() - QPoint(10, 10)
-            )
-            self.selectionWindow.setGeometry(QRect(globalPos, videoWidgetGeometry.size()))
+    def updateBlackBars(self) -> None:
+        if self.widgetAspectRatio > self.videoAspectRatio:
+            # Black bars on the left and right
+            scaledHeight = self.widgetHeight
+            scaledWidth = int(self.videoAspectRatio * scaledHeight)
+            xOffset = (self.widgetWidth - scaledWidth) // 2
+            yOffset = 0
+
+        else:
+            # Black bars on the top and bottom
+            scaledWidth = self.widgetWidth
+            scaledHeight = int(scaledWidth / self.videoAspectRatio)
+            xOffset = 0
+            yOffset = (self.widgetHeight - scaledHeight) // 2
+
+        self.videoTrueGeometry = QRect(xOffset, yOffset, scaledWidth, scaledHeight)
+
+    def setOverlaysPos(self) -> None:
+        if not hasattr(self, "videoAspectRatio"):
+            return
+
+        self.updateBlackBars()
+        globalPos = self.videoWidget.mapToGlobal(self.videoTrueGeometry.topLeft())
+        self.selectionWindow.setGeometry(QRect(globalPos, self.videoTrueGeometry.size()))
+        self.selectionWindow.show()
 
     def resizeEvent(self, a0: Optional[QResizeEvent]) -> None:
         super().resizeEvent(a0)
-        self.setOverlayPos()
+        if not hasattr(self, "videoWidget"):
+            return
+
+        self.widgetWidth = self.videoWidget.width()
+        self.widgetHeight = self.videoWidget.height()
+        self.widgetAspectRatio = self.widgetWidth / self.widgetHeight
+        self.setOverlaysPos()
 
     def moveEvent(self, a0: Optional[QMoveEvent]) -> None:
         super().moveEvent(a0)
-        self.setOverlayPos()
+        self.setOverlaysPos()
 
     def openVideo(self) -> None:
         filePath, _ = QFileDialog.getOpenFileName(
@@ -225,42 +288,61 @@ class VideoPlayer(QMainWindow):
 
     def loadVideo(self, filePath: Optional[str]) -> None:
         self.isLoaded = False
+        self.stopPlayback()
         if filePath is None:
             return
 
         if not Path(filePath).is_file():
             print(f"No such file {filePath}")
         self.mediaPlayer.setSource(QUrl.fromLocalFile(str(filePath)))
+        self.statusLabel.setText("Loading media...")
 
     def mediaLoaded(self, status: QMediaPlayer.MediaStatus) -> None:
         if self.isLoaded or status != QMediaPlayer.MediaStatus.LoadedMedia:
             return
 
+        self.statusLabel.setText("Media loaded!")
         self.isLoaded = True
         self.togglePlayback()
         self.totalTimeLabel.setText(format_time(self.mediaPlayer.duration() // 1000))
         self.timer.start()
+        self.videoWidth = self.mediaPlayer.metaData().value(QMediaMetaData.Key.Resolution).width()
+        self.videoHeight = self.mediaPlayer.metaData().value(QMediaMetaData.Key.Resolution).height()
+        self.videoAspectRatio = self.videoWidth / self.videoHeight
+        self.setOverlaysPos()
 
     def markStartFrame(self) -> None:
-        self.startGifTime = self.mediaPlayer.position()
+        if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
+            self.statusLabel.setText("Mark start frame")
+            self.startGifTime = self.mediaPlayer.position()
 
     def markEndFrame(self) -> None:
-        self.endGifTime = self.mediaPlayer.position()
-        self.extractGif()
+        if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
+            self.statusLabel.setText("Mark end frame")
+            self.endGifTime = self.mediaPlayer.position()
+            self.extractGif()
 
     def setPreviewWindow(self) -> None:
         print("SETTING PREVIEW")
 
-    def extractGifThread(self, cmd: list[str]) -> None:
-        if self.extractProc is not None:
-            self.extractProc.terminate()
-        self.extractProc = subprocess.Popen(cmd)
-        self.extractProc.communicate()
+    def onExtractStarted(self) -> None:
+        self.statusLabel.setText("Extraction started!")
 
-    def extractGif(self) -> None:
+    def onExtractFinished(self, status: bool, msg: str) -> None:
+        self.statusLabel.setText(msg)
+
+        self.extractThread.started.disconnect()
+        if self.extractWorker is not None:
+            self.extractWorker.taskFinished.disconnect()
+            self.extractWorker = None
+
+        if status:
+            self.setPreviewWindow()
+
+    def getExtractCmd(self) -> Optional[list[str]]:
         sel = self.selectionWindow.getRect()
         if self.startGifTime is None or self.endGifTime is None or sel is None:
-            return
+            return None
 
         filePath = self.mediaPlayer.source().path()
         cropStr = f"{sel.width()}:{sel.height()}:{sel.x()}:{sel.y()}"
@@ -268,17 +350,40 @@ class VideoPlayer(QMainWindow):
         clipLength = self.endGifTime - self.startGifTime
         endTimeStr = f"{format_time(clipLength // 1000)}.{clipLength % 1000}"
 
-        cmd = ["ffmpeg", "-an", "-i", filePath, "-vf", f"crop={cropStr}",
+        cmd = ["ffmpeg", "-y", "-an", "-i", filePath, "-vf", f"crop={cropStr}",
                 "-ss", startTimeStr, "-t", endTimeStr, str(self.tmpFileName)]
+        return cmd
 
-        self.extractThread = threading.Thread(target=self.extractGifThread, args=[cmd])
-        self.extractThread.start()
+    def extractGif(self) -> None:
+        cmd = self.getExtractCmd()
+        if cmd is None:
+            return
+
+        if self.extractWorker is not None:
+            self.extractWorker.stop()
+            self.extractThread.quit()
+            self.extractThread.wait()
+
+        self.extractWorker = FFmpegWorker(cmd=cmd)
+        self.extractWorker.moveToThread(self.extractThread)
+
+        self.extractThread.started.connect(self.extractWorker.run)
+        self.extractWorker.taskStarted.connect(self.onExtractStarted)
+        self.extractWorker.taskFinished.connect(self.onExtractFinished)
+        self.extractWorker.taskFinished.connect(self.extractThread.quit)
+
+        if not self.extractThread.isRunning():
+            self.extractThread.start()
 
     def saveGif(self) -> None:
         filePath, _ = QFileDialog.getSaveFileName(self, "Save File", "", "Gif Files (*.gif)")
         if not filePath.endswith(".gif"):
             filePath += ".gif"
-        self.tmpFileName.rename(filePath)
+        if self.tmpFileName.exists():
+            self.tmpFileName.rename(filePath)
+            self.statusLabel.setText("Gif saved!")
+        else:
+            self.statusLabel.setText("No clip selected")
 
     def seekVideo(self) -> None:
         newPosition = self.progressSlider.value() * self.mediaPlayer.duration() // 1000
@@ -346,6 +451,11 @@ class VideoPlayer(QMainWindow):
     def stopPlayback(self) -> None:
         self.mediaPlayer.stop()
         self.playButton.setIcon(QIcon.fromTheme("media-playback-start"))
+        self.selectionWindow.hide()
+        self.selectionWindow.clearSelection()
+        self.startGifTime = None
+        self.endGifTime = None
+        self.statusLabel.setText("")
 
     def seekRelative(self, milliseconds: int) -> None:
         newPosition = self.mediaPlayer.position() + milliseconds
@@ -373,16 +483,20 @@ class VideoPlayer(QMainWindow):
 
     def mousePressEvent(self, a0: Optional[QMouseEvent]) -> None:
         if a0 and a0.button() == Qt.MouseButton.LeftButton:
-            if not self.videoWidget.geometry().contains(a0.pos()):
+            if not self.videoTrueGeometry.contains(a0.pos()):
                 return
-            self.selectionWindow.startPos = a0.pos()
+
+            clickPos = a0.pos() - self.videoTrueGeometry.topLeft()
+            self.selectionWindow.startPos = clickPos
             self.selectionWindow.endPos = None
             self.selectionWindow.update()
 
     def mouseMoveEvent(self, a0: Optional[QMouseEvent]) -> None:
-        if not a0 or not self.videoWidget.geometry().contains(a0.pos()):
+        if not a0 or not self.videoTrueGeometry.contains(a0.pos()):
             return
-        self.selectionWindow.endPos = a0.pos()
+
+        clickPos = a0.pos() - self.videoTrueGeometry.topLeft()
+        self.selectionWindow.endPos = clickPos
         self.selectionWindow.update()
 
     def mouseReleaseEvent(self, a0: Optional[QMouseEvent]) -> None:
@@ -393,6 +507,13 @@ class VideoPlayer(QMainWindow):
     def closeEvent(self, a0: Optional[QCloseEvent]) -> None:
         self.tmpFileName.unlink(missing_ok=True)
         self.selectionWindow.close()
+        if self.extractWorker is not None:
+            self.extractWorker.stop()
+
+        self.extractThread.quit()
+        self.extractThread.wait()
+        self.extractThread.deleteLater()
+
         if a0:
             a0.accept()
 
