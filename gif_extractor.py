@@ -1,6 +1,7 @@
-# TODO: add tick to progress bar when setting startFrame and endFrame
 # TODO: keybinding to go to startFrame and endFrame
-# TODO: `c` or `<C-L>` to clear selection OR `p` to toggle preview
+# TODO: `c` to clear selection
+# TODO: `<C-l>` to clear selection, reset preview pos and hide it
+# TODO: draw previous selection in light green
 # TODO: window that recap all keybindings
 
 import argparse
@@ -46,6 +47,8 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
+    QStylePainter,
+    QStyleOptionSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -64,6 +67,75 @@ def format_time(seconds: int) -> str:
     if hours > 0:
         return f"{hours:02}:{minutes:02}:{seconds:02}"
     return f"{minutes:02}:{seconds:02}"
+
+
+class TickSlider(QSlider):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.startTick: Optional[int] = None
+        self.endTick: Optional[int] = None
+
+    def setStartTick(self) -> None:
+        self.startTick = self.value()
+
+    def setEndTick(self) -> None:
+        self.endTick = self.value()
+
+    def clearTicks(self) -> None:
+        self.startTick = None
+        self.endTick = None
+
+    def paintEvent(self, ev: Optional[QPaintEvent]) -> None:
+        if self.startTick is None and self.endTick is None:
+            return super().paintEvent(ev)
+
+        qp = QStylePainter(self)
+        opt = QStyleOptionSlider()
+        style = self.style()
+        self.initStyleOption(opt)
+        if style is None:
+            return
+
+        opt.subControls = style.SubControl.SC_SliderGroove
+        qp.drawComplexControl(style.ComplexControl.CC_Slider, opt)
+
+        sliderMin = self.minimum()
+        sliderMax = self.maximum()
+        sliderLength = style.pixelMetric(style.PixelMetric.PM_SliderLength, opt, self)
+        span = style.pixelMetric(style.PixelMetric.PM_SliderSpaceAvailable, opt, self)
+
+        qp.save()
+        qp.translate(opt.rect.x() + sliderLength / 2, 0)
+        grooveRect = style.subControlRect(
+            style.ComplexControl.CC_Slider, opt, style.SubControl.SC_SliderGroove
+        )
+        grooveTop = grooveRect.top()
+        grooveBottom = grooveRect.bottom()
+        bottom = self.height()
+
+        color = cast(QColor, QColorConstants.Green)
+        qp.setPen(QPen(color, 2))
+        if self.startTick is not None:
+            x = style.sliderPositionFromValue(
+                sliderMin, sliderMax, self.startTick, span
+            )
+            qp.drawLine(x, 0, x, grooveTop)
+            qp.drawLine(x, grooveBottom, x, bottom)
+
+        color = cast(QColor, QColorConstants.Red)
+        qp.setPen(QPen(color, 2))
+        if self.endTick is not None:
+            x = style.sliderPositionFromValue(sliderMin, sliderMax, self.endTick, span)
+            qp.drawLine(x, 0, x, grooveTop)
+            qp.drawLine(x, grooveBottom, x, bottom)
+
+        qp.restore()
+
+        opt.subControls = style.SubControl.SC_SliderHandle
+        opt.activeSubControls = style.SubControl.SC_SliderHandle
+        if self.isSliderDown():
+            opt.state |= style.StateFlag.State_Sunken
+        qp.drawComplexControl(style.ComplexControl.CC_Slider, opt)
 
 
 class SelectionWindow(QWidget):
@@ -254,7 +326,7 @@ class VideoPlayer(QMainWindow):
         self.speedLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         progressLayout.addWidget(self.speedLabel)
 
-        self.progressSlider = QSlider(Qt.Orientation.Horizontal, self)
+        self.progressSlider = TickSlider(Qt.Orientation.Horizontal, self)
         self.progressSlider.setRange(0, 1000)
         self.progressSlider.sliderReleased.connect(self.seekVideo)
         progressLayout.addWidget(self.progressSlider)
@@ -454,11 +526,13 @@ class VideoPlayer(QMainWindow):
         if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
             self.statusLabel.setText("Mark start frame")
             self.startGifTime = self.mediaPlayer.position()
+            self.progressSlider.setStartTick()
 
     def markEndFrame(self) -> None:
         if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
             self.statusLabel.setText("Mark end frame")
             self.endGifTime = self.mediaPlayer.position()
+            self.progressSlider.setEndTick()
             self.extractGif()
 
     def onExtractStarted(self) -> None:
