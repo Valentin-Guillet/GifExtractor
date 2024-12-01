@@ -1,4 +1,3 @@
-# TODO: keybinding to go to startFrame and endFrame
 # TODO: `c` to clear selection
 # TODO: `<C-l>` to clear selection, reset preview pos and hide it
 # TODO: draw previous selection in light green
@@ -528,14 +527,30 @@ class VideoPlayer(QMainWindow):
         if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
             self.statusLabel.setText("Mark start frame")
             self.startGifTime = self.mediaPlayer.position()
+            if self.endGifTime is not None and self.startGifTime >= self.endGifTime:
+                self.endGifTime = None
+                self.progressSlider.clearTicks()
             self.progressSlider.setStartTick()
 
     def markEndFrame(self) -> None:
         if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
             self.statusLabel.setText("Mark end frame")
             self.endGifTime = self.mediaPlayer.position()
+            if self.startGifTime is not None and self.endGifTime <= self.startGifTime:
+                self.startGifTime = None
+                self.progressSlider.clearTicks()
             self.progressSlider.setEndTick()
-            self.extractGif()
+
+            if self.startGifTime is not None:
+                self.extractGif()
+
+    def gotoStartFrame(self) -> None:
+        if self.startGifTime is not None:
+            self.mediaPlayer.setPosition(self.startGifTime)
+
+    def gotoEndFrame(self) -> None:
+        if self.endGifTime is not None:
+            self.mediaPlayer.setPosition(self.endGifTime)
 
     def onExtractStarted(self) -> None:
         self.statusLabel.setText("Extraction started!")
@@ -642,6 +657,10 @@ class VideoPlayer(QMainWindow):
             self.markStartFrame()
         elif key == Qt.Key.Key_E:
             self.markEndFrame()
+        elif key == Qt.Key.Key_A:
+            self.gotoStartFrame()
+        elif key == Qt.Key.Key_D:
+            self.gotoEndFrame()
         elif key == Qt.Key.Key_X:
             self.extractGif()
         elif key == Qt.Key.Key_G:
