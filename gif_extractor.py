@@ -296,9 +296,11 @@ class VideoPlayer(QMainWindow):
         self.endGifTime = None
         self.playbackSpeeds = [0.25, 0.5, 1, 1.5, 2, 3, 4, 8, 16]
         self.currentSpeedIndex = self.playbackSpeeds.index(1)
-        self.timer = QTimer(self)
-        self.timer.setInterval(15)
-        self.timer.timeout.connect(self.updateProgressBar)
+
+        # Update progress bar every 15ms
+        self.progressBarTimer = QTimer(self)
+        self.progressBarTimer.setInterval(15)
+        self.progressBarTimer.timeout.connect(self.updateProgressBar)
 
         self.initUi()
         self.loadVideo(videoPath)
@@ -460,7 +462,7 @@ class VideoPlayer(QMainWindow):
         self.isLoaded = True
         self.togglePlayback()
         self.totalTimeLabel.setText(format_time(self.mediaPlayer.duration() // 1000))
-        self.timer.start()
+        self.progressBarTimer.start()
         self.videoWidth = self.mediaPlayer.metaData().value(QMediaMetaData.Key.Resolution).width()
         self.videoHeight = self.mediaPlayer.metaData().value(QMediaMetaData.Key.Resolution).height()
         self.videoAspectRatio = self.videoWidth / self.videoHeight
