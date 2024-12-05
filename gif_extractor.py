@@ -374,10 +374,6 @@ class VideoPlayer(QMainWindow):
         self.endButton.clicked.connect(self.markEndFrame)
         controlLayout.addWidget(self.endButton)
 
-        self.extractButton = QPushButton("Extract", self)
-        self.extractButton.clicked.connect(self.extractGif)
-        controlLayout.addWidget(self.extractButton)
-
         self.statusLabel = QLabel(self)
         controlLayout.addWidget(self.statusLabel)
 
@@ -546,6 +542,9 @@ class VideoPlayer(QMainWindow):
             self.progressSlider.setStartTick()
             self.progressSlider.update()
 
+            if self.endGifTime is not None:
+                self.extractGif()
+
     def markEndFrame(self) -> None:
         if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
             self.statusLabel.setText("Mark end frame")
@@ -699,9 +698,6 @@ class VideoPlayer(QMainWindow):
 
         elif key == Qt.Key.Key_D:
             self.gotoEndFrame()
-
-        elif key == Qt.Key.Key_X:
-            self.extractGif()
 
         elif key == Qt.Key.Key_G:
             self.saveGif()
