@@ -657,7 +657,7 @@ class VideoPlayer(QMainWindow):
             self.setPreviewPos()
             self.previewWindow.hide()
 
-        elif key in {Qt.Key.Key_H, Qt.Key.Key_L}:
+        elif key in {Qt.Key.Key_J, Qt.Key.Key_L}:
             sign = 1 if key == Qt.Key.Key_L else -1
             if a0.modifiers() & Qt.KeyboardModifier.AltModifier:
                 delay = 100
