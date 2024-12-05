@@ -5,7 +5,7 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional, cast
+from typing import Callable, Optional, cast
 
 from PyQt6.QtCore import (
     QObject,
@@ -44,8 +44,9 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
-    QStylePainter,
+    QStyle,
     QStyleOptionSlider,
+    QStylePainter,
     QVBoxLayout,
     QWidget,
 )
@@ -67,10 +68,29 @@ def format_time(seconds: int) -> str:
 
 
 class TickSlider(QSlider):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    """
+    QSlider class that can display special marks on the slider and that responds to mouse clicks.
+    The code is loosely based on these two thread:
+    https://stackoverflow.com/questions/68179408/i-need-to-put-several-marks-on-a-qslider
+    https://stackoverflow.com/questions/52689047/moving-qslider-to-mouse-click-position
+    """
+
+    def __init__(
+        self,
+        orientation: Qt.Orientation,
+        parent: Optional[QWidget],
+        clickCb: Callable[[], None],
+        moveCb: Callable[[], None],
+        releaseCb: Callable[[], None],
+    ) -> None:
+        super().__init__(orientation, parent)
         self.startTick: Optional[int] = None
         self.endTick: Optional[int] = None
+
+        self.hasClickedSlider = False
+        self.clickCb = clickCb
+        self.moveCb = moveCb
+        self.releaseCb = releaseCb
 
     def setStartTick(self) -> None:
         self.startTick = self.value()
@@ -82,16 +102,70 @@ class TickSlider(QSlider):
         self.startTick = None
         self.endTick = None
 
+    def mousePressEvent(self, ev: Optional[QMouseEvent]) -> None:
+        if ev is None or ev.button() != Qt.MouseButton.LeftButton:
+            return
+        super().mousePressEvent(ev)  # Don't report middle button
+
+        self.hasClickedSlider = True
+        val = self.pixelPosToRangeValue(ev.pos())
+        if val is not None:
+            self.setValue(val)
+            self.clickCb()
+            self.moveCb()
+
+    def mouseMoveEvent(self, ev: Optional[QMouseEvent]) -> None:
+        if ev is None or not self.hasClickedSlider:
+            return
+        super().mousePressEvent(ev)
+
+        val = self.pixelPosToRangeValue(ev.pos())
+        if val is not None:
+            self.setValue(val)
+            self.moveCb()
+
+    def mouseReleaseEvent(self, ev: Optional[QMouseEvent]) -> None:
+        if ev is None or not self.hasClickedSlider:
+            return
+        super().mouseReleaseEvent(ev)
+
+        self.hasClickedSlider = False
+        self.releaseCb()
+
+    def pixelPosToRangeValue(self, pos: QPoint) -> Optional[int]:
+        opt = QStyleOptionSlider()
+        style = self.style()
+        if style is None:
+            return None
+
+        self.initStyleOption(opt)
+        gr = style.subControlRect(QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove, self)
+        sr = style.subControlRect(QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderHandle, self)
+
+        if self.orientation() == Qt.Orientation.Horizontal:
+            sliderLength = sr.width()
+            sliderMin = gr.x()
+            sliderMax = gr.right() - sliderLength + 1
+        else:
+            sliderLength = sr.height()
+            sliderMin = gr.y()
+            sliderMax = gr.bottom() - sliderLength + 1
+        pr = pos - sr.center() + sr.topLeft()
+        p = pr.x() if self.orientation() == Qt.Orientation.Horizontal else pr.y()
+        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), p - sliderMin,
+                                              sliderMax - sliderMin, opt.upsideDown)
+
     def paintEvent(self, ev: Optional[QPaintEvent]) -> None:
+        """Override painting to add ticks on startTick and endTick positions"""
         if self.startTick is None and self.endTick is None:
             return super().paintEvent(ev)
 
         qp = QStylePainter(self)
         opt = QStyleOptionSlider()
         style = self.style()
-        self.initStyleOption(opt)
         if style is None:
             return
+        self.initStyleOption(opt)
 
         opt.subControls = style.SubControl.SC_SliderGroove
         qp.drawComplexControl(style.ComplexControl.CC_Slider, opt)
@@ -160,7 +234,7 @@ class SelectionWindow(QWidget):
     def validate(self) -> None:
         self.validatedSel = self.getRect()
 
-    def paintEvent(self, a0: Optional[QPaintEvent]):
+    def paintEvent(self, a0: Optional[QPaintEvent]) -> None:
         del a0
         selectionRect = self.getRect()
         if selectionRect is None:
@@ -303,6 +377,7 @@ class VideoPlayer(QMainWindow):
         self.previewAnchor: Optional[QPoint] = None
         self.clickOnPreview: Optional[QPoint] = None
 
+        self.hasClickedVideo = False
         self.startGifTime: Optional[int] = None
         self.endGifTime: Optional[int] = None
         self.playbackSpeeds = [0.25, 0.5, 1, 1.5, 2, 3, 4, 8, 16]
@@ -339,9 +414,18 @@ class VideoPlayer(QMainWindow):
         self.speedLabel.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         progressLayout.addWidget(self.speedLabel)
 
-        self.progressSlider = TickSlider(Qt.Orientation.Horizontal, self)
+        self.progressSlider = TickSlider(
+            Qt.Orientation.Horizontal,
+            self,
+            self.sliderPressed,
+            self.sliderMoved,
+            self.sliderReleased,
+        )
         self.progressSlider.setRange(0, 1000)
-        self.progressSlider.sliderReleased.connect(self.seekVideo)
+        self.sliderSavedStateIsPlaying: Optional[bool] = None
+        self.progressSlider.sliderPressed.connect(self.sliderPressed)
+        self.progressSlider.sliderMoved.connect(self.sliderMoved)
+        self.progressSlider.sliderReleased.connect(self.sliderReleased)
         progressLayout.addWidget(self.progressSlider)
 
         self.totalTimeLabel = QLabel("00:00", self)
@@ -476,8 +560,32 @@ class VideoPlayer(QMainWindow):
         self.videoAspectRatio = self.videoWidth / self.videoHeight
         self.setSelectOverlayPos()
 
+    def sliderPressed(self) -> None:
+        if not self.isLoaded:
+            return
+
+        self.sliderSavedStateIsPlaying = (
+            self.mediaPlayer.playbackState() == QMediaPlayer.PlaybackState.PlayingState
+        )
+        self.mediaPlayer.pause()
+
+    def sliderMoved(self) -> None:
+        if not self.isLoaded:
+            return
+
+        newPosition = self.progressSlider.value() * self.mediaPlayer.duration() // 1000
+        self.mediaPlayer.setPosition(newPosition)
+
+    def sliderReleased(self) -> None:
+        if not self.isLoaded:
+            return
+
+        if self.sliderSavedStateIsPlaying:
+            self.mediaPlayer.play()
+        self.sliderSavedStateIsPlaying = None
+
     def updateProgressBar(self) -> None:
-        if self.mediaPlayer.duration() <= 0:
+        if self.sliderSavedStateIsPlaying is not None or self.mediaPlayer.duration() <= 0:
             return
         progress = self.mediaPlayer.position() / self.mediaPlayer.duration() * 1000
         self.progressSlider.setValue(int(progress))
@@ -504,10 +612,6 @@ class VideoPlayer(QMainWindow):
         self.startGifTime = None
         self.endGifTime = None
         self.statusLabel.setText("")
-
-    def seekVideo(self) -> None:
-        newPosition = self.progressSlider.value() * self.mediaPlayer.duration() // 1000
-        self.mediaPlayer.setPosition(newPosition)
 
     def seekRelative(self, milliseconds: int) -> None:
         newPosition = self.mediaPlayer.position() + milliseconds
@@ -717,22 +821,34 @@ class VideoPlayer(QMainWindow):
             self.close()
 
     def mousePressEvent(self, a0: Optional[QMouseEvent]) -> None:
-        if a0 and a0.button() == Qt.MouseButton.LeftButton:
-            if self.previewWindow.isVisible() and self.previewTrueGeometry.contains(a0.pos()):
-                self.clickOnPreview = a0.pos()
-                return
+        super().mousePressEvent(a0)
+        if a0 is None:
+            return
 
-            if not self.videoTrueGeometry.contains(a0.pos()):
-                return
+        if a0.button() == Qt.MouseButton.MiddleButton:
+            self.selectionWindow.clearSelection()
+            return
 
-            clickPos = a0.pos() - self.videoTrueGeometry.topLeft()
-            self.selectionWindow.startPos = clickPos
-            self.selectionWindow.endPos = None
-            self.selectionWindow.update()
-            self.previewWindow.hide()
+        if a0.button() != Qt.MouseButton.LeftButton:
+            return
+
+        self.hasClickedVideo = True
+        if self.previewWindow.isVisible() and self.previewTrueGeometry.contains(a0.pos()):
+            self.clickOnPreview = a0.pos()
+            return
+
+        if not self.videoTrueGeometry.contains(a0.pos()):
+            return
+
+        clickPos = a0.pos() - self.videoTrueGeometry.topLeft()
+        self.selectionWindow.startPos = clickPos
+        self.selectionWindow.endPos = None
+        self.selectionWindow.update()
+        self.previewWindow.hide()
 
     def mouseMoveEvent(self, a0: Optional[QMouseEvent]) -> None:
-        if not a0:
+        super().mouseMoveEvent(a0)
+        if a0 is None or not self.hasClickedVideo:
             return
 
         if (
@@ -753,7 +869,11 @@ class VideoPlayer(QMainWindow):
         self.selectionWindow.update()
 
     def mouseReleaseEvent(self, a0: Optional[QMouseEvent]) -> None:
-        del a0
+        super().mouseMoveEvent(a0)
+        if a0 is None or not self.hasClickedVideo:
+            return
+
+        self.hasClickedVideo = False
         if self.clickOnPreview is not None:
             self.clickOnPreview = None
             return
