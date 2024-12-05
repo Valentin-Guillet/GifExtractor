@@ -297,6 +297,7 @@ class VideoPlayer(QMainWindow):
         self.extractWorker: Optional[FFmpegWorker] = None
 
         # Overlays for selection and preview
+        self.previewEnabled = True
         self.selectionWindow = SelectionWindow(self)
         self.previewWindow = PreviewWindow(self)
         self.previewAnchor: Optional[QPoint] = None
@@ -408,7 +409,7 @@ class VideoPlayer(QMainWindow):
         self.selectionWindow.setGeometry(QRect(globalPos, self.videoTrueGeometry.size()))
         self.selectionWindow.show()
 
-    def setPreviewPos(self):
+    def setPreviewPos(self) -> None:
         if not hasattr(self, "previewWindow") or not self.previewWindow.hasMedia():
             return
 
@@ -429,7 +430,8 @@ class VideoPlayer(QMainWindow):
         self.previewTrueGeometry = QRect(pos, QSize(previewWidth, previewHeight))
         globalPos = self.videoWidget.mapToGlobal(pos)
         self.previewWindow.setGeometry(QRect(globalPos, QSize(previewWidth, previewHeight)))
-        self.previewWindow.show()
+        if self.previewEnabled:
+            self.previewWindow.show()
 
     def resizeEvent(self, a0: Optional[QResizeEvent]) -> None:
         super().resizeEvent(a0)
@@ -701,6 +703,7 @@ class VideoPlayer(QMainWindow):
             self.saveGif()
 
         elif key == Qt.Key.Key_P:
+            self.previewEnabled = not self.previewEnabled
             self.previewWindow.toggle()
 
         elif key == Qt.Key.Key_C:
