@@ -1,5 +1,25 @@
-# TODO: document code
+# TODO: add button to save gif
+# TODO: reduce gif size -> maybe ugly version in preview and beautiful version when saving?
 # TODO: bind `?` to window that recap all keybindings
+
+"""
+GIF Extractor - Extract GIFs from MP4 Videos
+
+This script provides a GUI application for extracting GIFs from MP4 videos. Users can select a crop region, mark start and end frames, and export the selected clip as a GIF using FFmpeg.
+
+Key features:
+- Video playback with support for seeking and playback speed adjustments.
+- Selection overlay for defining the cropped region.
+- GIF preview functionality.
+- Keyboard shortcuts for various operations.
+- Built with PyQt6 for the GUI and FFmpeg for video processing.
+
+Usage:
+    python gif_extractor.py [videoPath]
+
+Args:
+    videoPath (optional): Path to the MP4 video to open initially.
+"""
 
 import argparse
 import subprocess
@@ -53,8 +73,8 @@ from PyQt6.QtWidgets import (
 
 
 def parseArgs() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("videoPath", type=str, nargs="?")
+    parser = argparse.ArgumentParser(description="Extract GIFs from MP4 videos.")
+    parser.add_argument("videoPath", type=str, nargs="?", help="Path to the video file to open.")
     return parser.parse_args()
 
 
@@ -69,8 +89,8 @@ def format_time(seconds: int) -> str:
 
 class TickSlider(QSlider):
     """
-    QSlider class that can display special marks on the slider and that responds to mouse clicks.
-    The code is loosely based on these two thread:
+    Custom QSlider class with tick marks and that responds to mouse clicks for navigation.
+    The code is loosely based on these two threads:
     https://stackoverflow.com/questions/68179408/i-need-to-put-several-marks-on-a-qslider
     https://stackoverflow.com/questions/52689047/moving-qslider-to-mouse-click-position
     """
@@ -105,8 +125,8 @@ class TickSlider(QSlider):
     def mousePressEvent(self, ev: Optional[QMouseEvent]) -> None:
         if ev is None or ev.button() != Qt.MouseButton.LeftButton:
             return
-        super().mousePressEvent(ev)  # Don't report middle button
 
+        super().mousePressEvent(ev)
         self.hasClickedSlider = True
         val = self.pixelPosToRangeValue(ev.pos())
         if val is not None:
@@ -117,8 +137,8 @@ class TickSlider(QSlider):
     def mouseMoveEvent(self, ev: Optional[QMouseEvent]) -> None:
         if ev is None or not self.hasClickedSlider:
             return
-        super().mousePressEvent(ev)
 
+        super().mousePressEvent(ev)
         val = self.pixelPosToRangeValue(ev.pos())
         if val is not None:
             self.setValue(val)
@@ -137,8 +157,8 @@ class TickSlider(QSlider):
         style = self.style()
         if style is None:
             return None
-
         self.initStyleOption(opt)
+
         gr = style.subControlRect(QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove, self)
         sr = style.subControlRect(QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderHandle, self)
 
@@ -152,8 +172,9 @@ class TickSlider(QSlider):
             sliderMax = gr.bottom() - sliderLength + 1
         pr = pos - sr.center() + sr.topLeft()
         p = pr.x() if self.orientation() == Qt.Orientation.Horizontal else pr.y()
-        return QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), p - sliderMin,
-                                              sliderMax - sliderMin, opt.upsideDown)
+        return QStyle.sliderValueFromPosition(
+            self.minimum(), self.maximum(), p - sliderMin, sliderMax - sliderMin, opt.upsideDown
+        )
 
     def paintEvent(self, ev: Optional[QPaintEvent]) -> None:
         """Override painting to add ticks on startTick and endTick positions"""
@@ -167,49 +188,53 @@ class TickSlider(QSlider):
             return
         self.initStyleOption(opt)
 
-        opt.subControls = style.SubControl.SC_SliderGroove
-        qp.drawComplexControl(style.ComplexControl.CC_Slider, opt)
+        # Draw slider groove
+        opt.subControls = QStyle.SubControl.SC_SliderGroove
+        qp.drawComplexControl(QStyle.ComplexControl.CC_Slider, opt)
 
         sliderMin = self.minimum()
         sliderMax = self.maximum()
-        sliderLength = style.pixelMetric(style.PixelMetric.PM_SliderLength, opt, self)
-        span = style.pixelMetric(style.PixelMetric.PM_SliderSpaceAvailable, opt, self)
+        sliderLength = style.pixelMetric(QStyle.PixelMetric.PM_SliderLength, opt, self)
+        span = style.pixelMetric(QStyle.PixelMetric.PM_SliderSpaceAvailable, opt, self)
 
         qp.save()
         qp.translate(opt.rect.x() + sliderLength / 2, 0)
         grooveRect = style.subControlRect(
-            style.ComplexControl.CC_Slider, opt, style.SubControl.SC_SliderGroove
+            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove
         )
         grooveTop = grooveRect.top()
         grooveBottom = grooveRect.bottom()
         bottom = self.height()
 
-        color = cast(QColor, QColorConstants.Green)
-        qp.setPen(QPen(color, 2))
+        # Draw start tick
         if self.startTick is not None:
-            x = style.sliderPositionFromValue(
-                sliderMin, sliderMax, self.startTick, span
-            )
+            qp.setPen(QPen(QColorConstants.Green, 2))
+            x = style.sliderPositionFromValue(sliderMin, sliderMax, self.startTick, span)
             qp.drawLine(x, 0, x, grooveTop)
             qp.drawLine(x, grooveBottom, x, bottom)
 
-        color = cast(QColor, QColorConstants.Red)
-        qp.setPen(QPen(color, 2))
+        # Draw end tick
         if self.endTick is not None:
+            qp.setPen(QPen(QColorConstants.Red, 2))
             x = style.sliderPositionFromValue(sliderMin, sliderMax, self.endTick, span)
             qp.drawLine(x, 0, x, grooveTop)
             qp.drawLine(x, grooveBottom, x, bottom)
 
         qp.restore()
 
-        opt.subControls = style.SubControl.SC_SliderHandle
-        opt.activeSubControls = style.SubControl.SC_SliderHandle
+        # Draw slider handle
+        opt.subControls = QStyle.SubControl.SC_SliderHandle
+        opt.activeSubControls = QStyle.SubControl.SC_SliderHandle
         if self.isSliderDown():
-            opt.state |= style.StateFlag.State_Sunken
-        qp.drawComplexControl(style.ComplexControl.CC_Slider, opt)
+            opt.state |= QStyle.StateFlag.State_Sunken
+        qp.drawComplexControl(QStyle.ComplexControl.CC_Slider, opt)
 
 
 class SelectionWindow(QWidget):
+    """
+    Overlay widget to allow users to select a rectangular region for cropping.
+    This widget draws a translucent rectangle to show the selected crop area.
+    """
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -222,6 +247,7 @@ class SelectionWindow(QWidget):
         self.validatedSel: Optional[QRect] = None
 
     def getRect(self) -> Optional[QRect]:
+        """Returns the selected crop area as a QRect, or None if not selected."""
         if self.startPos is None or self.endPos is None:
             return None
 
@@ -235,6 +261,7 @@ class SelectionWindow(QWidget):
         self.validatedSel = self.getRect()
 
     def paintEvent(self, a0: Optional[QPaintEvent]) -> None:
+        """Draws a translucent rectangle to show the selected crop area."""
         del a0
         selectionRect = self.getRect()
         if selectionRect is None:
@@ -247,6 +274,7 @@ class SelectionWindow(QWidget):
         painter.setBrush(QBrush(color))
         painter.drawRect(selectionRect)
 
+        # Draw translucent green rectangle for validated selection
         if self.validatedSel is not None:
             color = cast(QColor, QColorConstants.Green)
             color.setAlphaF(0.2)
@@ -267,6 +295,9 @@ class SelectionWindow(QWidget):
 
 
 class PreviewWindow(QWidget):
+    """
+    Overlay widget to show a preview of the selected crop area.
+    """
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -287,7 +318,7 @@ class PreviewWindow(QWidget):
     def hasMedia(self) -> bool:
         return self.movie is not None
 
-    def load(self, path: str) -> None:
+    def loadGif(self, path: str) -> None:
         self.stop()
         self.movie = QMovie(path)
         self.label.setMovie(self.movie)
@@ -317,6 +348,9 @@ class PreviewWindow(QWidget):
 
 
 class FFmpegWorker(QObject):
+    """
+    Worker class to run the FFmpeg command in a separate thread.
+    """
     taskStarted = pyqtSignal()
     taskFinished = pyqtSignal(bool, str)
 
@@ -464,6 +498,7 @@ class VideoPlayer(QMainWindow):
         layout.addWidget(controls)
 
     def updateBlackBars(self) -> None:
+        """Compute the geometry of the video without the black bars"""
         if self.widgetAspectRatio > self.videoAspectRatio:
             # Black bars on the left and right
             scaledHeight = self.widgetHeight
@@ -481,6 +516,7 @@ class VideoPlayer(QMainWindow):
         self.videoTrueGeometry = QRect(xOffset, yOffset, scaledWidth, scaledHeight)
 
     def setSelectOverlayPos(self) -> None:
+        """Set the position of the selection overlay to the video geometry"""
         if not hasattr(self, "isLoaded") or not self.isLoaded:
             return
 
@@ -490,6 +526,7 @@ class VideoPlayer(QMainWindow):
         self.selectionWindow.show()
 
     def setPreviewPos(self) -> None:
+        """Set the position of the preview window to the video geometry"""
         if not hasattr(self, "previewWindow") or not self.previewWindow.hasMedia():
             return
 
@@ -502,6 +539,7 @@ class VideoPlayer(QMainWindow):
             previewHeight = min(gifHeight, maxHeight)
             previewWidth = previewHeight * gifWidth // gifHeight
 
+        # Preview has been moved via a click and drag
         if self.previewAnchor is not None:
             pos = self.previewAnchor
         else:
@@ -543,6 +581,8 @@ class VideoPlayer(QMainWindow):
 
         if not Path(filePath).is_file():
             self.statusLabel.setText(f"No such file {filePath}")
+            return
+
         self.mediaPlayer.setSource(QUrl.fromLocalFile(str(filePath)))
         self.statusLabel.setText("Loading media...")
 
@@ -671,7 +711,7 @@ class VideoPlayer(QMainWindow):
             self.mediaPlayer.setPosition(self.endGifTime)
 
     def onExtractStarted(self) -> None:
-        self.statusLabel.setText("Extraction started!")
+        self.statusLabel.setText("Extraction started...")
 
     def onExtractFinished(self, status: bool, msg: str) -> None:
         self.statusLabel.setText(msg)
@@ -682,7 +722,7 @@ class VideoPlayer(QMainWindow):
             self.extractWorker = None
 
         if status:
-            self.previewWindow.load(str(self.tmpFileName))
+            self.previewWindow.loadGif(str(self.tmpFileName))
             self.setPreviewPos()
 
     def getExtractCmd(self) -> Optional[list[str]]:
@@ -892,8 +932,7 @@ class VideoPlayer(QMainWindow):
         self.extractThread.wait()
         self.extractThread.deleteLater()
 
-        if a0:
-            a0.accept()
+        super().closeEvent(a0)
 
 
 if __name__ == "__main__":
