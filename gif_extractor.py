@@ -303,8 +303,8 @@ class VideoPlayer(QMainWindow):
         self.previewAnchor: Optional[QPoint] = None
         self.clickOnPreview: Optional[QPoint] = None
 
-        self.startGifTime = None
-        self.endGifTime = None
+        self.startGifTime: Optional[int] = None
+        self.endGifTime: Optional[int] = None
         self.playbackSpeeds = [0.25, 0.5, 1, 1.5, 2, 3, 4, 8, 16]
         self.currentSpeedIndex = self.playbackSpeeds.index(1)
 
@@ -544,6 +544,7 @@ class VideoPlayer(QMainWindow):
                 self.endGifTime = None
                 self.progressSlider.clearTicks()
             self.progressSlider.setStartTick()
+            self.progressSlider.update()
 
     def markEndFrame(self) -> None:
         if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
@@ -553,6 +554,7 @@ class VideoPlayer(QMainWindow):
                 self.startGifTime = None
                 self.progressSlider.clearTicks()
             self.progressSlider.setEndTick()
+            self.progressSlider.update()
 
             if self.startGifTime is not None:
                 self.extractGif()
@@ -649,6 +651,8 @@ class VideoPlayer(QMainWindow):
 
         elif key == Qt.Key.Key_L and a0.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.selectionWindow.clearSelection()
+            self.startGifTime = None
+            self.endGifTime = None
             self.previewAnchor = None
             self.setPreviewPos()
             self.previewWindow.hide()
