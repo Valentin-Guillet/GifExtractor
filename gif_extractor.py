@@ -1,5 +1,5 @@
-# TODO: add button to save gif
 # TODO: reduce gif size -> maybe ugly version in preview and beautiful version when saving?
+# TODO: display ffmpeg progress bar
 # TODO: bind `?` to window that recap all keybindings
 
 """
@@ -174,13 +174,14 @@ class TickSlider(QSlider):
         pr = pos - sr.center() + sr.topLeft()
         p = pr.x() if self.orientation() == Qt.Orientation.Horizontal else pr.y()
         return QStyle.sliderValueFromPosition(
-            self.minimum(), self.maximum(), p - sliderMin, sliderMax - sliderMin, opt.upsideDown
+            self.minimum(), self.maximum(), p - sliderMin, sliderMax - sliderMin, opt.upsideDown,
         )
 
     def paintEvent(self, ev: Optional[QPaintEvent]) -> None:
         """Override painting to add ticks on startTick and endTick positions"""
         if self.startTick is None and self.endTick is None:
-            return super().paintEvent(ev)
+            super().paintEvent(ev)
+            return
 
         qp = QStylePainter(self)
         opt = QStyleOptionSlider()
@@ -201,7 +202,7 @@ class TickSlider(QSlider):
         qp.save()
         qp.translate(opt.rect.x() + sliderLength / 2, 0)
         grooveRect = style.subControlRect(
-            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove
+            QStyle.ComplexControl.CC_Slider, opt, QStyle.SubControl.SC_SliderGroove,
         )
         grooveTop = grooveRect.top()
         grooveBottom = grooveRect.bottom()
@@ -355,7 +356,7 @@ class FFmpegWorker(QObject):
     taskStarted = pyqtSignal()
     taskFinished = pyqtSignal(bool, str)
 
-    def __init__(self, parent: Optional['QObject'] = None, cmd: Optional[list[str]] = None) -> None:
+    def __init__(self, parent: Optional["QObject"] = None, cmd: Optional[list[str]] = None) -> None:
         super().__init__(parent)
         self.isRunning = False
         self.extractCmd = cmd
@@ -493,6 +494,10 @@ class VideoPlayer(QMainWindow):
         self.endButton.clicked.connect(self.markEndFrame)
         controlLayout.addWidget(self.endButton)
 
+        self.saveButton = QPushButton("Save GIF", self)
+        self.saveButton.clicked.connect(self.saveGif)
+        controlLayout.addWidget(self.saveButton)
+
         self.statusLabel = QLabel(self)
         controlLayout.addWidget(self.statusLabel)
 
@@ -570,7 +575,7 @@ class VideoPlayer(QMainWindow):
 
     def openVideo(self) -> None:
         filePath, _ = QFileDialog.getOpenFileName(
-            self, "Open Video", "", "Video Files (*.mp4 *.avi *.mkv)"
+            self, "Open Video", "", "Video Files (*.mp4 *.avi *.mkv)",
         )
         self.loadVideo(filePath)
 
