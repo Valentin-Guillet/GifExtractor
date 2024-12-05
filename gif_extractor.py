@@ -22,6 +22,7 @@ Args:
 """
 
 import argparse
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -400,7 +401,7 @@ class VideoPlayer(QMainWindow):
         self.mediaPlayer.mediaStatusChanged[QMediaPlayer.MediaStatus].connect(self.mediaLoaded)
         self.videoTrueGeometry = QRect()
 
-        self.tmpFileName = Path("/tmp/gif_extractor_tmpfile.gif")
+        self.tmpGifFile = Path("/tmp/gif_extractor_tmpfile.gif")
         self.extractThread = QThread()
         self.extractWorker: Optional[FFmpegWorker] = None
 
@@ -722,7 +723,7 @@ class VideoPlayer(QMainWindow):
             self.extractWorker = None
 
         if status:
-            self.previewWindow.loadGif(str(self.tmpFileName))
+            self.previewWindow.loadGif(str(self.tmpGifFile))
             self.setPreviewPos()
 
     def getExtractCmd(self) -> Optional[list[str]]:
@@ -744,7 +745,7 @@ class VideoPlayer(QMainWindow):
         endTimeStr = f"{format_time(clipLength // 1000)}.{clipLength % 1000}"
 
         cmd = ["ffmpeg", "-y", "-an", "-i", filePath, "-vf", f"crop={cropStr}",
-                "-ss", startTimeStr, "-t", endTimeStr, str(self.tmpFileName)]
+                "-ss", startTimeStr, "-t", endTimeStr, str(self.tmpGifFile)]
         return cmd
 
     def extractGif(self) -> None:
@@ -778,8 +779,8 @@ class VideoPlayer(QMainWindow):
 
         if not filePath.endswith(".gif"):
             filePath += ".gif"
-        if self.tmpFileName.exists():
-            self.tmpFileName.rename(filePath)
+        if self.tmpGifFile.exists():
+            shutil.copy(self.tmpGifFile, filePath)
             self.statusLabel.setText("Gif saved!")
         else:
             self.statusLabel.setText("No clip selected")
@@ -922,7 +923,7 @@ class VideoPlayer(QMainWindow):
         self.extractGif()
 
     def closeEvent(self, a0: Optional[QCloseEvent]) -> None:
-        self.tmpFileName.unlink(missing_ok=True)
+        self.tmpGifFile.unlink(missing_ok=True)
         self.selectionWindow.close()
         self.previewWindow.close()
         if self.extractWorker is not None:
