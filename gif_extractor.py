@@ -1,4 +1,3 @@
-# TODO: draw previous selection in light green
 # TODO: document code
 # TODO: bind `?` to window that recap all keybindings
 
@@ -30,8 +29,8 @@ from PyQt6.QtGui import (
     QMoveEvent,
     QMovie,
     QPainter,
-    QPen,
     QPaintEvent,
+    QPen,
     QResizeEvent,
 )
 from PyQt6.QtMultimedia import QMediaMetaData, QMediaPlayer
@@ -146,6 +145,7 @@ class SelectionWindow(QWidget):
 
         self.startPos: Optional[QPoint] = None
         self.endPos: Optional[QPoint] = None
+        self.validatedSel: Optional[QRect] = None
 
     def getRect(self) -> Optional[QRect]:
         if self.startPos is None or self.endPos is None:
@@ -156,6 +156,9 @@ class SelectionWindow(QWidget):
         y1 = min(self.startPos.y(), self.endPos.y()) - 10
         y2 = max(self.startPos.y(), self.endPos.y()) - 10
         return QRect(QPoint(x1, y1), QPoint(x2, y2))
+
+    def validate(self) -> None:
+        self.validatedSel = self.getRect()
 
     def paintEvent(self, a0: Optional[QPaintEvent]):
         del a0
@@ -169,6 +172,14 @@ class SelectionWindow(QWidget):
         painter.setPen(QPen(color, 2))
         painter.setBrush(QBrush(color))
         painter.drawRect(selectionRect)
+
+        if self.validatedSel is not None:
+            color = cast(QColor, QColorConstants.Green)
+            color.setAlphaF(0.2)
+            painter.setPen(QPen(color, 2))
+            painter.setBrush(QBrush(color))
+            painter.drawRect(self.validatedSel)
+
         painter.end()
 
     def isValid(self) -> bool:
@@ -177,6 +188,7 @@ class SelectionWindow(QWidget):
     def clearSelection(self) -> None:
         self.startPos = None
         self.endPos = None
+        self.validatedSel = None
         self.update()
 
 
@@ -592,6 +604,9 @@ class VideoPlayer(QMainWindow):
         cmd = self.getExtractCmd()
         if cmd is None:
             return
+
+        self.selectionWindow.validate()
+        self.selectionWindow.update()
 
         if self.extractWorker is not None:
             self.extractWorker.stop()
