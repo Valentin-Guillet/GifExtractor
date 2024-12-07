@@ -1,4 +1,3 @@
-# TODO: don't use shutil: mv TMP_OUTPUT_FILE to position, block if needed
 # TODO: display ffmpeg progress bar
 # TODO: bind `?` to window that recap all keybindings
 
@@ -22,7 +21,6 @@ Args:
 """
 
 import argparse
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -825,7 +823,7 @@ class VideoPlayer(QMainWindow):
         if not filePath.endswith(".gif"):
             filePath += ".gif"
         if TMP_OUTPUT_FILE.exists():
-            shutil.copy(TMP_OUTPUT_FILE, filePath)
+            TMP_OUTPUT_FILE.rename(filePath)
             self.statusLabel.setText("Gif saved!")
         else:
             self.statusLabel.setText("No clip selected")
