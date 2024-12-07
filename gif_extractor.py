@@ -1,4 +1,5 @@
-# TODO: make a preview worker and a processing worker to be able to interrupt them independantly
+# TODO: fix crash when too many interrupts
+# TODO: fix crash when window become too small (division by zero)
 # TODO: display ffmpeg progress bar
 # TODO: bind `?` to window that recap all keybindings
 
@@ -22,12 +23,12 @@ Args:
 """
 
 import argparse
+import enum
 import shutil
 import sys
-import time
 from pathlib import Path
 from subprocess import DEVNULL, Popen
-from typing import Any, Callable, Optional, cast
+from typing import Callable, Optional, cast
 
 from PyQt6.QtCore import (
     QObject,
@@ -355,92 +356,35 @@ class PreviewWindow(QWidget):
             self.movie = None
 
 
-class FFmpegWorker(QObject):
-    """
-    Worker class to run the FFmpeg command in a separate thread.
-    """
-    taskStarted = pyqtSignal()
-    previewReady = pyqtSignal()
-    conversionDone = pyqtSignal()
-    extractionFinished = pyqtSignal(str)
+class WorkerStatus(enum.Enum):
+    SUCCESS = enum.auto()
+    FAILURE = enum.auto()
+    ERROR = enum.auto()
 
-    def __init__(
-        self,
-        filePath: str,
-        startTime: str,
-        length: str,
-        cropArg: str,
-        optimizationLevel: int,
-    ) -> None:
+
+class Worker(QObject):
+    taskFinished = pyqtSignal(WorkerStatus, str)
+
+    def __init__(self, cmd: list[str]) -> None:
         super().__init__()
-        self.process: Optional[Popen] = None
-        self.interrupt = False
 
-        self.filePath = filePath
-        self.startTime = startTime
-        self.length = length
-        self.cropArg = cropArg
-        self.optimizationLevel = optimizationLevel
+        self.workerThread = QThread()
+
+        self.process: Optional[Popen] = None
+        self.cmd = cmd
 
     def run(self) -> None:
-        self.interrupt = False
-        self.trimCmd = ["ffmpeg", "-y", "-an", "-ss", self.startTime, "-t", self.length,
-                        "-i", self.filePath, "-c", "copy", str(TMP_MP4_TRIM_FILE)]
-
-        self.previewCmd = ["ffmpeg", "-y", "-i", str(TMP_MP4_TRIM_FILE),
-                           "-vf", f"crop={self.cropArg}", str(TMP_PREVIEW_FILE)]
-
-        filterStr = (
-            f"crop={self.cropArg}, split [s0][s1];"
-            " [s0] palettegen=max_colors=64:stats_mode=diff [pal];"
-            " [s1] fifo [s1] ; [s1] [pal] paletteuse=dither=bayer"
-        )
-        self.conversionCmd = ["ffmpeg", "-y", "-i", str(TMP_MP4_TRIM_FILE),
-                              "-vf", filterStr, str(TMP_OUTPUT_FILE)]
-
-        self.optimizationCmd = ["gifsicle", "-O3", f"--lossy={self.optimizationLevel}",
-                                "-o", str(TMP_OUTPUT_FILE), str(TMP_OUTPUT_FILE)]
         try:
-            self.taskStarted.emit()
-            if self.interrupt:
-                return
-
-            self.process = Popen(self.trimCmd, stderr=DEVNULL)
+            self.process = Popen(self.cmd, stderr=DEVNULL)
             self.process.wait()
 
-            if self.interrupt:
-                return
-
-            self.process = Popen(self.previewCmd, stderr=DEVNULL)
-            self.process.wait()
             if self.process.returncode == 0:
-                self.previewReady.emit()
-
-            if self.interrupt:
-                return
-
-            self.process = Popen(self.conversionCmd, stderr=DEVNULL)
-            self.process.wait()
-            if self.process.returncode == 0:
-                self.conversionDone.emit()
-
-            if self.interrupt:
-                return
-
-            if self.optimizationLevel != -1:
-                self.process = Popen(self.optimizationCmd, stderr=DEVNULL)
-                self.process.wait()
-
-                if self.interrupt:
-                    return
-
-            if self.process.returncode == 0:
-                self.extractionFinished.emit("Gif extracted!")
+                self.taskFinished.emit(WorkerStatus.SUCCESS, "")
             else:
-                self.extractionFinished.emit("Error in extraction process...")
+                self.taskFinished.emit(WorkerStatus.FAILURE, "")
 
         except Exception as e:
-            self.extractionFinished.emit(f"Exception during process: {e}")
+            self.taskFinished.emit(WorkerStatus.ERROR, f"Exception during process: {e}")
 
         finally:
             self.process = None
@@ -448,8 +392,42 @@ class FFmpegWorker(QObject):
     def stop(self) -> None:
         if self.process is not None:
             self.process.terminate()
-            self.extractionFinished.emit("Task was interrupted")
-            self.interrupt = True
+
+
+class WorkerRunner:
+
+    def __init__(self, callback: Callable[[WorkerStatus, str], None]) -> None:
+        self.thread = QThread()
+        self.worker: Optional[Worker] = None
+        self.callback = callback
+
+    def interrupt(self) -> None:
+        if self.worker is None:
+            return
+
+        self.worker.stop()
+        self.thread.started.disconnect()
+
+        self.thread.quit()
+        self.thread.wait()
+        self.worker = None
+
+    def run(self, cmd: list[str]) -> None:
+        self.interrupt()
+
+        self.worker = Worker(cmd)
+        self.worker.moveToThread(self.thread)
+
+        self.thread.started.connect(self.worker.run)
+        self.worker.taskFinished.connect(self.callback)
+        self.worker.taskFinished.connect(self.interrupt)
+
+        if not self.thread.isRunning():
+            self.thread.start()
+
+    def close(self) -> None:
+        self.interrupt()
+        self.thread.deleteLater()
 
 
 class VideoPlayer(QMainWindow):
@@ -468,8 +446,10 @@ class VideoPlayer(QMainWindow):
         self.videoTrueGeometry = QRect()
 
         self.gifOutputFile: Optional[str] = None
-        self.extractThread = QThread()
-        self.extractWorker: Optional[FFmpegWorker] = None
+        self.trimWorker = WorkerRunner(self.onTrimFinished)
+        self.previewWorker = WorkerRunner(self.onPreviewFinished)
+        self.conversionWorker = WorkerRunner(self.onConversionFinished)
+        self.optimizationWorker = WorkerRunner(self.onOptimizationFinished)
 
         # Overlays for selection and preview
         self.previewEnabled = True
@@ -776,7 +756,7 @@ class VideoPlayer(QMainWindow):
             self.progressSlider.update()
 
             if self.endGifTime is not None:
-                self.extractGif()
+                self.gifTrim()
 
     def markEndFrame(self) -> None:
         if self.isLoaded and self.mediaPlayer.playbackState() != QMediaPlayer.PlaybackState.StoppedState:
@@ -789,7 +769,7 @@ class VideoPlayer(QMainWindow):
             self.progressSlider.update()
 
             if self.startGifTime is not None:
-                self.extractGif()
+                self.gifTrim()
 
     def gotoStartFrame(self) -> None:
         if self.startGifTime is not None:
@@ -799,31 +779,8 @@ class VideoPlayer(QMainWindow):
         if self.endGifTime is not None:
             self.mediaPlayer.setPosition(self.endGifTime)
 
-    def onExtractStarted(self) -> None:
-        self.statusLabel.setText("Extraction started...")
-
-    def onPreviewReady(self) -> None:
-        self.previewWindow.loadGif(str(TMP_PREVIEW_FILE))
-        self.setPreviewPos()
-
-    def onConversionDone(self) -> None:
-        self.statusLabel.setText("Conversion done, starting optimization...")
-
-    def onExtractFinished(self, msg: str) -> None:
-        self.statusLabel.setText(msg)
-
-        self.extractThread.started.disconnect()
-        self.extractWorker = None
-
-        if self.gifOutputFile is not None:
-            self.mvGifFile(self.gifOutputFile)
-            self.gifOutputFile = None
-
-
-    def getExtractCmd(self) -> Optional[list[Any]]:
-        sel = self.selectionWindow.getRect()
-        if self.startGifTime is None or self.endGifTime is None or sel is None:
-            return
+    def getCropCoords(self) -> str:
+        sel = cast(QRect, self.selectionWindow.getRect())
 
         widthRatio = self.videoWidth / self.videoTrueGeometry.width()
         heightRatio = self.videoHeight / self.videoTrueGeometry.height()
@@ -831,45 +788,111 @@ class VideoPlayer(QMainWindow):
         y = int(sel.y() * heightRatio)
         w = int(sel.width() * widthRatio)
         h = int(sel.height() * heightRatio)
+        return f"{w}:{h}:{x}:{y}"
+
+    def gifTrim(self) -> None:
+        if self.startGifTime is None or self.endGifTime is None:
+            return
+        self.statusLabel.setText("Trimming video...")
+
+        # Stop preview generation when user has selected another clip
+        self.previewWorker.interrupt()
 
         filePath = self.mediaPlayer.source().path()
-        cropStr = f"{w}:{h}:{x}:{y}"
         startTimeStr = f"{format_time(self.startGifTime // 1000)}.{self.startGifTime % 1000}"
         clipLength = self.endGifTime - self.startGifTime
         lengthStr = f"{format_time(clipLength // 1000)}.{clipLength % 1000}"
 
-        if shutil.which("gifsicle") is None or not self.optimizationBox.isChecked():
-            optimizationLevel = -1
-        else:
-            optimizationLevel = self.optimizationField.value()
+        trimCmd = ["ffmpeg", "-y", "-an", "-ss", startTimeStr, "-t", lengthStr,
+                   "-i", filePath, "-c", "copy", str(TMP_MP4_TRIM_FILE)]
+        self.trimWorker.run(trimCmd)
 
-        return [filePath, startTimeStr, lengthStr, cropStr, optimizationLevel]
-
-    def extractGif(self) -> None:
-        workerArgs = self.getExtractCmd()
-        if workerArgs is None:
+    def gifPreview(self) -> None:
+        if not TMP_MP4_TRIM_FILE.exists() or not self.selectionWindow.isValid():
             return
 
+        cropCoords = self.getCropCoords()
         self.selectionWindow.validate()
         self.selectionWindow.update()
 
-        if self.extractWorker is not None:
-            self.extractWorker.stop()
-            self.extractThread.quit()
-            self.extractThread.wait()
+        previewCmd = ["ffmpeg", "-y", "-i", str(TMP_MP4_TRIM_FILE),
+                      "-vf", f"crop={cropCoords}", str(TMP_PREVIEW_FILE)]
+        self.previewWorker.run(previewCmd)
 
-        self.extractWorker = FFmpegWorker(*workerArgs)
-        self.extractWorker.moveToThread(self.extractThread)
+    def gifConversion(self) -> None:
+        if not TMP_MP4_TRIM_FILE.exists() or not self.selectionWindow.isValid():
+            return
 
-        self.extractThread.started.connect(self.extractWorker.run)
-        self.extractWorker.taskStarted.connect(self.onExtractStarted)
-        self.extractWorker.previewReady.connect(self.onPreviewReady)
-        self.extractWorker.conversionDone.connect(self.onConversionDone)
-        self.extractWorker.extractionFinished.connect(self.onExtractFinished)
-        self.extractWorker.extractionFinished.connect(self.extractThread.quit)
+        self.statusLabel.setText("Converting video...")
+        # Stop optimization when another clip is being converted
+        self.optimizationWorker.interrupt()
 
-        if not self.extractThread.isRunning():
-            self.extractThread.start()
+        cropCoords = self.getCropCoords()
+        filterStr = (
+            f"crop={cropCoords}, split [s0][s1];"
+            " [s0] palettegen=max_colors=64:stats_mode=diff [pal];"
+            " [s1] fifo [s1] ; [s1] [pal] paletteuse=dither=bayer"
+        )
+
+        conversionCmd = ["ffmpeg", "-y", "-i", str(TMP_MP4_TRIM_FILE),
+                         "-vf", filterStr, str(TMP_OUTPUT_FILE)]
+        self.conversionWorker.run(conversionCmd)
+
+    def gifOptimization(self) -> None:
+        if not TMP_OUTPUT_FILE.exists():
+            return
+
+        if shutil.which("gifsicle") is None:
+            self.statusLabel.setText("Executable `gifsicle` not found!")
+            return
+
+        self.statusLabel.setText("Optimizing GIF...")
+        optimizationCmd = ["gifsicle", "-O3", f"--lossy={self.optimizationField.value()}",
+                           "-o", str(TMP_OUTPUT_FILE), str(TMP_OUTPUT_FILE)]
+        self.optimizationWorker.run(optimizationCmd)
+
+    def onTrimFinished(self, status: WorkerStatus, msg: str) -> None:
+        if status == WorkerStatus.SUCCESS:
+            self.statusLabel.setText("Video trimmed!")
+            self.gifPreview()
+            self.gifConversion()
+
+        elif status == WorkerStatus.FAILURE:
+            self.statusLabel.setText("Something went wrong when trimming file")
+
+        elif status == WorkerStatus.ERROR:
+            self.statusLabel.setText(f"Error occured in worker task: {msg}")
+
+    def onPreviewFinished(self, status: WorkerStatus, _: str) -> None:
+        if status == WorkerStatus.SUCCESS:
+            self.previewWindow.loadGif(str(TMP_PREVIEW_FILE))
+            self.setPreviewPos()
+
+    def onConversionFinished(self, status: WorkerStatus, msg: str) -> None:
+        if status == WorkerStatus.SUCCESS:
+            if self.optimizationBox.isChecked():
+                self.gifOptimization()
+            else:
+                self.statusLabel.setText("Conversion finished!")
+
+        elif status == WorkerStatus.FAILURE:
+            self.statusLabel.setText("Something went wrong when converting file")
+
+        elif status == WorkerStatus.ERROR:
+            self.statusLabel.setText(f"Error occured in worker task: {msg}")
+
+    def onOptimizationFinished(self, status: WorkerStatus, msg: str) -> None:
+        if status == WorkerStatus.SUCCESS:
+            self.statusLabel.setText("Gif extracted successfully!")
+            if self.gifOutputFile is not None:
+                self.mvGifFile(self.gifOutputFile)
+                self.gifOutputFile = None
+
+        elif status == WorkerStatus.FAILURE:
+            self.statusLabel.setText("Something went wrong when converting file")
+
+        elif status == WorkerStatus.ERROR:
+            self.statusLabel.setText(f"Error occured in worker task: {msg}")
 
     def mvGifFile(self, filePath: str) -> None:
         TMP_OUTPUT_FILE.rename(filePath)
@@ -887,10 +910,8 @@ class VideoPlayer(QMainWindow):
         if not filePath.endswith(".gif"):
             filePath += ".gif"
 
-        if self.extractWorker is None:
+        if self.optimizationWorker.worker is None:
             self.mvGifFile(filePath)
-            TMP_OUTPUT_FILE.rename(filePath)
-            self.statusLabel.setText("Gif saved!")
         else:
             self.gifOutputFile = filePath
 
@@ -1029,17 +1050,18 @@ class VideoPlayer(QMainWindow):
             return
 
         self.selectionWindow.update()
-        self.extractGif()
+
+        self.gifPreview()
+        self.gifConversion()
 
     def closeEvent(self, a0: Optional[QCloseEvent]) -> None:
         self.selectionWindow.close()
         self.previewWindow.close()
-        if self.extractWorker is not None:
-            self.extractWorker.stop()
 
-        self.extractThread.quit()
-        self.extractThread.wait()
-        self.extractThread.deleteLater()
+        self.trimWorker.close()
+        self.previewWorker.close()
+        self.conversionWorker.close()
+        self.optimizationWorker.close()
 
         TMP_MP4_TRIM_FILE.unlink(missing_ok=True)
         TMP_PREVIEW_FILE.unlink(missing_ok=True)
