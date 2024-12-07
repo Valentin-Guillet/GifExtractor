@@ -1,3 +1,4 @@
+# TODO: make a preview worker and a processing worker to be able to interrupt them independantly
 # TODO: display ffmpeg progress bar
 # TODO: bind `?` to window that recap all keybindings
 
@@ -21,10 +22,12 @@ Args:
 """
 
 import argparse
-import subprocess
+import shutil
 import sys
+import time
 from pathlib import Path
-from typing import Callable, Optional, cast
+from subprocess import DEVNULL, Popen
+from typing import Any, Callable, Optional, cast
 
 from PyQt6.QtCore import (
     QObject,
@@ -56,6 +59,7 @@ from PyQt6.QtMultimedia import QMediaMetaData, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QVideoWidget
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -63,6 +67,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QSlider,
+    QSpinBox,
     QStyle,
     QStyleOptionSlider,
     QStylePainter,
@@ -356,19 +361,26 @@ class FFmpegWorker(QObject):
     """
     taskStarted = pyqtSignal()
     previewReady = pyqtSignal()
+    conversionDone = pyqtSignal()
     extractionFinished = pyqtSignal(str)
 
     def __init__(
-        self, filePath: str, startTime: str, length: str, cropArg: str
+        self,
+        filePath: str,
+        startTime: str,
+        length: str,
+        cropArg: str,
+        optimizationLevel: int,
     ) -> None:
         super().__init__()
-        self.process: Optional[subprocess.Popen] = None
+        self.process: Optional[Popen] = None
         self.interrupt = False
 
         self.filePath = filePath
         self.startTime = startTime
         self.length = length
         self.cropArg = cropArg
+        self.optimizationLevel = optimizationLevel
 
     def run(self) -> None:
         self.interrupt = False
@@ -383,21 +395,23 @@ class FFmpegWorker(QObject):
             " [s0] palettegen=max_colors=64:stats_mode=diff [pal];"
             " [s1] fifo [s1] ; [s1] [pal] paletteuse=dither=bayer"
         )
-
         self.conversionCmd = ["ffmpeg", "-y", "-i", str(TMP_MP4_TRIM_FILE),
                               "-vf", filterStr, str(TMP_OUTPUT_FILE)]
+
+        self.optimizationCmd = ["gifsicle", "-O3", f"--lossy={self.optimizationLevel}",
+                                "-o", str(TMP_OUTPUT_FILE), str(TMP_OUTPUT_FILE)]
         try:
             self.taskStarted.emit()
             if self.interrupt:
                 return
 
-            self.process = subprocess.Popen(self.trimCmd, stderr=subprocess.DEVNULL)
+            self.process = Popen(self.trimCmd, stderr=DEVNULL)
             self.process.wait()
 
             if self.interrupt:
                 return
 
-            self.process = subprocess.Popen(self.previewCmd, stderr=subprocess.DEVNULL)
+            self.process = Popen(self.previewCmd, stderr=DEVNULL)
             self.process.wait()
             if self.process.returncode == 0:
                 self.previewReady.emit()
@@ -405,11 +419,20 @@ class FFmpegWorker(QObject):
             if self.interrupt:
                 return
 
-            self.process = subprocess.Popen(self.conversionCmd, stderr=subprocess.DEVNULL)
+            self.process = Popen(self.conversionCmd, stderr=DEVNULL)
             self.process.wait()
+            if self.process.returncode == 0:
+                self.conversionDone.emit()
 
             if self.interrupt:
                 return
+
+            if self.optimizationLevel != -1:
+                self.process = Popen(self.optimizationCmd, stderr=DEVNULL)
+                self.process.wait()
+
+                if self.interrupt:
+                    return
 
             if self.process.returncode == 0:
                 self.extractionFinished.emit("Gif extracted!")
@@ -444,6 +467,7 @@ class VideoPlayer(QMainWindow):
         self.mediaPlayer.mediaStatusChanged[QMediaPlayer.MediaStatus].connect(self.mediaLoaded)
         self.videoTrueGeometry = QRect()
 
+        self.gifOutputFile: Optional[str] = None
         self.extractThread = QThread()
         self.extractWorker: Optional[FFmpegWorker] = None
 
@@ -538,6 +562,19 @@ class VideoPlayer(QMainWindow):
         self.saveButton = QPushButton("Save GIF", self)
         self.saveButton.clicked.connect(self.saveGif)
         controlLayout.addWidget(self.saveButton)
+
+        self.optimizationBox = QCheckBox("&Optimize", self)
+        self.optimizationBox.setChecked(True)
+        self.optimizationBox.checkStateChanged.connect(self.toggleOptimizationField)
+        controlLayout.addWidget(self.optimizationBox)
+
+        self.optimizationLabel = QLabel("Level", self)
+        controlLayout.addWidget(self.optimizationLabel)
+
+        self.optimizationField = QSpinBox(self)
+        self.optimizationField.setRange(5, 200)
+        self.optimizationField.setValue(20)
+        controlLayout.addWidget(self.optimizationField)
 
         self.statusLabel = QLabel(self)
         controlLayout.addWidget(self.statusLabel)
@@ -671,6 +708,11 @@ class VideoPlayer(QMainWindow):
             self.mediaPlayer.play()
         self.sliderSavedStateIsPlaying = None
 
+    def toggleOptimizationField(self) -> None:
+        status = not self.optimizationField.isEnabled()
+        self.optimizationField.setEnabled(status)
+        self.optimizationLabel.setEnabled(status)
+
     def updateProgressBar(self) -> None:
         if self.sliderSavedStateIsPlaying is not None or self.mediaPlayer.duration() <= 0:
             return
@@ -764,13 +806,21 @@ class VideoPlayer(QMainWindow):
         self.previewWindow.loadGif(str(TMP_PREVIEW_FILE))
         self.setPreviewPos()
 
+    def onConversionDone(self) -> None:
+        self.statusLabel.setText("Conversion done, starting optimization...")
+
     def onExtractFinished(self, msg: str) -> None:
         self.statusLabel.setText(msg)
 
         self.extractThread.started.disconnect()
         self.extractWorker = None
 
-    def getExtractCmd(self) -> Optional[list[str]]:
+        if self.gifOutputFile is not None:
+            self.mvGifFile(self.gifOutputFile)
+            self.gifOutputFile = None
+
+
+    def getExtractCmd(self) -> Optional[list[Any]]:
         sel = self.selectionWindow.getRect()
         if self.startGifTime is None or self.endGifTime is None or sel is None:
             return
@@ -788,7 +838,12 @@ class VideoPlayer(QMainWindow):
         clipLength = self.endGifTime - self.startGifTime
         lengthStr = f"{format_time(clipLength // 1000)}.{clipLength % 1000}"
 
-        return [filePath, startTimeStr, lengthStr, cropStr]
+        if shutil.which("gifsicle") is None or not self.optimizationBox.isChecked():
+            optimizationLevel = -1
+        else:
+            optimizationLevel = self.optimizationField.value()
+
+        return [filePath, startTimeStr, lengthStr, cropStr, optimizationLevel]
 
     def extractGif(self) -> None:
         workerArgs = self.getExtractCmd()
@@ -809,24 +864,35 @@ class VideoPlayer(QMainWindow):
         self.extractThread.started.connect(self.extractWorker.run)
         self.extractWorker.taskStarted.connect(self.onExtractStarted)
         self.extractWorker.previewReady.connect(self.onPreviewReady)
+        self.extractWorker.conversionDone.connect(self.onConversionDone)
         self.extractWorker.extractionFinished.connect(self.onExtractFinished)
         self.extractWorker.extractionFinished.connect(self.extractThread.quit)
 
         if not self.extractThread.isRunning():
             self.extractThread.start()
 
+    def mvGifFile(self, filePath: str) -> None:
+        TMP_OUTPUT_FILE.rename(filePath)
+        self.statusLabel.setText("Gif saved!")
+
     def saveGif(self) -> None:
+        if not TMP_OUTPUT_FILE.exists():
+            self.statusLabel.setText("No clip selected")
+            return
+
         filePath, _ = QFileDialog.getSaveFileName(self, "Save File", "", "Gif Files (*.gif)")
         if not filePath:
             return
 
         if not filePath.endswith(".gif"):
             filePath += ".gif"
-        if TMP_OUTPUT_FILE.exists():
+
+        if self.extractWorker is None:
+            self.mvGifFile(filePath)
             TMP_OUTPUT_FILE.rename(filePath)
             self.statusLabel.setText("Gif saved!")
         else:
-            self.statusLabel.setText("No clip selected")
+            self.gifOutputFile = filePath
 
     def keyPressEvent(self, a0: Optional[QKeyEvent]) -> None:
         if not a0:
