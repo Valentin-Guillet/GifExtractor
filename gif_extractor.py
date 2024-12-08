@@ -1,4 +1,3 @@
-# TODO: prevent quitting when gif has not been saved
 # TODO: modify keybinding `g` to extract
 # TODO: display ffmpeg progress bar
 # TODO: don't reset selection rect and preview on resize but compute their new positions
@@ -66,6 +65,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSlider,
@@ -449,6 +449,7 @@ class VideoPlayer(QMainWindow):
         self.mediaPlayer.mediaStatusChanged[QMediaPlayer.MediaStatus].connect(self.mediaLoaded)
         self.videoTrueGeometry = QRect()
 
+        self.extractionRunning = False
         self.gifOutputFile: Optional[str] = None
         self.trimWorker = WorkerRunner(self.onTrimFinished)
         self.previewWorker = WorkerRunner(self.onPreviewFinished)
@@ -843,6 +844,7 @@ class VideoPlayer(QMainWindow):
 
         conversionCmd = ["ffmpeg", "-y", "-i", str(TMP_MP4_TRIM_FILE),
                          "-vf", filterStr, str(TMP_OUTPUT_FILE)]
+        self.extractionRunning = True
         self.conversionWorker.run(conversionCmd)
 
     def gifOptimization(self) -> None:
@@ -865,9 +867,11 @@ class VideoPlayer(QMainWindow):
             self.gifConversion()
 
         elif status == WorkerStatus.FAILURE:
+            self.extractionRunning = False
             self.statusLabel.setText("Something went wrong when trimming file")
 
         elif status == WorkerStatus.ERROR:
+            self.extractionRunning = False
             self.statusLabel.setText(f"Error occured in worker task: {msg}")
 
     def onPreviewFinished(self, status: WorkerStatus, _: str) -> None:
@@ -880,6 +884,7 @@ class VideoPlayer(QMainWindow):
             if self.optimizationBox.isChecked():
                 self.gifOptimization()
             else:
+                self.extractionRunning = False
                 self.statusLabel.setText("Gif extracted successfully!")
 
         elif status == WorkerStatus.FAILURE:
@@ -889,6 +894,7 @@ class VideoPlayer(QMainWindow):
             self.statusLabel.setText(f"Error occured in worker task: {msg}")
 
     def onOptimizationFinished(self, status: WorkerStatus, msg: str) -> None:
+        self.extractionRunning = False
         if status == WorkerStatus.SUCCESS:
             self.statusLabel.setText("Gif extracted successfully!")
             if self.gifOutputFile is not None:
@@ -996,7 +1002,7 @@ class VideoPlayer(QMainWindow):
             self.setPreviewPos()
 
         elif key == Qt.Key.Key_Q:
-            self.close()
+            self.closeWithConfirm()
 
     def cropAnchor(self, anchor: QPoint) -> QPoint:
         vx = self.videoWidget.geometry().width()
@@ -1070,6 +1076,25 @@ class VideoPlayer(QMainWindow):
 
         self.gifPreview()
         self.gifConversion()
+
+    def closeWithConfirm(self) -> None:
+        if not self.extractionRunning and not TMP_OUTPUT_FILE.exists():
+            self.close()
+            return
+
+        confirmBox = QMessageBox()
+        if self.extractionRunning:
+            msg = "A GIF is being extracted right now, do you want to quit anyway?"
+        else:
+            msg = "A GIF has been extracted but not saved, do you want to quit anyway?"
+        confirmBox.setText(msg)
+        confirmBox.setStandardButtons(
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel
+        )
+
+        quitValue = confirmBox.exec()
+        if quitValue == QMessageBox.StandardButton.Ok:
+            self.close()
 
     def closeEvent(self, a0: Optional[QCloseEvent]) -> None:
         self.selectionWindow.close()
