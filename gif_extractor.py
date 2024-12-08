@@ -1,4 +1,3 @@
-# TODO: prevent from saving previous GIF during optimization
 # TODO: don't reset selection rect and preview on resize but compute their new positions
 # TODO: bind `?` to window that recap all keybindings
 
@@ -468,7 +467,6 @@ class VideoPlayer(QMainWindow):
         self.videoTrueGeometry = QRect()
 
         self.extractionRunning = False
-        self.gifOutputFile: Optional[str] = None
         self.trimWorker = WorkerRunner(self.onTrimFinished)
         self.previewWorker = WorkerRunner(self.onPreviewFinished)
         self.conversionWorker = WorkerRunner(self.onConversionFinished, self.onConversionProgress)
@@ -853,8 +851,10 @@ class VideoPlayer(QMainWindow):
             return
 
         self.statusLabel.setText("Converting video...")
+
         # Stop optimization when another clip is being converted
         self.optimizationWorker.interrupt()
+        TMP_OUTPUT_FILE.unlink(missing_ok=True)
 
         cropCoords = self.getCropCoords()
         filterStr = (
@@ -928,9 +928,6 @@ class VideoPlayer(QMainWindow):
         self.extractionRunning = False
         if status == WorkerStatus.SUCCESS:
             self.statusLabel.setText("Gif extracted successfully!")
-            if self.gifOutputFile is not None:
-                self.mvGifFile(self.gifOutputFile)
-                self.gifOutputFile = None
 
         elif status == WorkerStatus.FAILURE:
             self.statusLabel.setText("Something went wrong when converting file")
@@ -938,13 +935,17 @@ class VideoPlayer(QMainWindow):
         elif status == WorkerStatus.ERROR:
             self.statusLabel.setText(f"Error occured in worker task: {msg}")
 
-    def mvGifFile(self, filePath: str) -> None:
-        TMP_OUTPUT_FILE.rename(filePath)
-        self.statusLabel.setText("Gif saved!")
-
     def saveGif(self) -> None:
+        if self.conversionWorker.worker is not None:
+            self.statusLabel.setText("GIF is converting!")
+            return
+
+        if self.optimizationWorker.worker is not None:
+            self.statusLabel.setText("Clip is being optimized, this can take a while...")
+            return
+
         if not TMP_OUTPUT_FILE.exists():
-            self.statusLabel.setText("No clip selected")
+            self.statusLabel.setText("No clip selected!")
             return
 
         filePath, _ = QFileDialog.getSaveFileName(self, "Save File", "", "Gif Files (*.gif)")
@@ -954,10 +955,8 @@ class VideoPlayer(QMainWindow):
         if not filePath.endswith(".gif"):
             filePath += ".gif"
 
-        if self.optimizationWorker.worker is None:
-            self.mvGifFile(filePath)
-        else:
-            self.gifOutputFile = filePath
+        TMP_OUTPUT_FILE.rename(filePath)
+        self.statusLabel.setText("Gif saved!")
 
     def keyPressEvent(self, a0: Optional[QKeyEvent]) -> None:
         if not a0:
