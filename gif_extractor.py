@@ -1,4 +1,5 @@
-# TODO: prevent sliding preview outside of video geometry
+# TODO: manage selection rect when resizing
+# TODO: remove DEVNULL to see what's happening (terminal needs reset)
 # TODO: prevent quitting when gif has not been saved
 # TODO: modify keybinding `g` to extract
 # TODO: display ffmpeg progress bar
@@ -460,7 +461,7 @@ class VideoPlayer(QMainWindow):
         self.selectionWindow = SelectionWindow(self)
         self.previewWindow = PreviewWindow(self)
         self.previewAnchor: Optional[QPoint] = None
-        self.clickOnPreview: Optional[QPoint] = None
+        self.clickPreviewVec: Optional[QPoint] = None
 
         self.hasClickedVideo = False
         self.startGifTime: Optional[int] = None
@@ -610,12 +611,12 @@ class VideoPlayer(QMainWindow):
 
         # Preview has been moved via a click and drag
         if self.previewAnchor is not None:
-            pos = self.previewAnchor
+            topLeftPos = self.previewAnchor
         else:
-            pos = QPoint(self.videoTrueGeometry.right() - previewWidth, self.videoTrueGeometry.top())
+            topLeftPos = QPoint(self.videoTrueGeometry.right() - previewWidth, self.videoTrueGeometry.top())
 
-        self.previewTrueGeometry = QRect(pos, QSize(previewWidth, previewHeight))
-        globalPos = self.videoWidget.mapToGlobal(pos)
+        self.previewRelGeometry = QRect(topLeftPos, QSize(previewWidth, previewHeight))
+        globalPos = self.videoWidget.mapToGlobal(topLeftPos)
         self.previewWindow.setGeometry(QRect(globalPos, QSize(previewWidth, previewHeight)))
         if self.previewEnabled:
             self.previewWindow.show()
@@ -625,6 +626,7 @@ class VideoPlayer(QMainWindow):
         if not hasattr(self, "videoWidget"):
             return
 
+        self.previewAnchor = None
         self.widgetWidth = self.videoWidget.width()
         self.widgetHeight = self.videoWidget.height()
         self.widgetAspectRatio = self.widgetWidth / self.widgetHeight
@@ -996,6 +998,17 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key.Key_Q:
             self.close()
 
+    def cropAnchor(self, anchor: QPoint) -> QPoint:
+        vx = self.videoWidget.geometry().width()
+        dx = self.previewRelGeometry.width()
+        x = max(0, min(anchor.x(), vx - dx))
+
+        vy = self.videoWidget.geometry().height()
+        dy = self.previewRelGeometry.height()
+        y = max(0, min(anchor.y(), vy - dy))
+
+        return QPoint(x, y)
+
     def mousePressEvent(self, a0: Optional[QMouseEvent]) -> None:
         super().mousePressEvent(a0)
         if a0 is None:
@@ -1011,8 +1024,8 @@ class VideoPlayer(QMainWindow):
             return
 
         self.hasClickedVideo = True
-        if self.previewWindow.isVisible() and self.previewTrueGeometry.contains(a0.pos()):
-            self.clickOnPreview = a0.pos()
+        if self.previewWindow.isVisible() and self.previewRelGeometry.contains(a0.pos()):
+            self.clickPreviewVec = self.previewRelGeometry.topLeft() - a0.pos()
             return
 
         if not self.videoTrueGeometry.contains(a0.pos()):
@@ -1029,21 +1042,17 @@ class VideoPlayer(QMainWindow):
         if a0 is None or not self.hasClickedVideo:
             return
 
-        if (
-            self.clickOnPreview is not None
-            and self.previewWindow.isVisible()
-            and self.videoWidget.geometry().contains(a0.pos())
-        ):
-            self.previewAnchor = self.previewTrueGeometry.topLeft() + a0.pos() - self.clickOnPreview
-            self.clickOnPreview = a0.pos()
-            self.setPreviewPos()
+        # Move preview window
+        if self.clickPreviewVec is not None and self.previewWindow.isVisible():
+            self.previewAnchor = self.cropAnchor(a0.pos() + self.clickPreviewVec)
+            globalPos = self.videoWidget.mapToGlobal(self.previewAnchor)
+            self.previewWindow.setGeometry(QRect(globalPos, self.previewRelGeometry.size()))
             return
 
         if not self.videoTrueGeometry.contains(a0.pos()):
             return
 
-        clickPos = a0.pos() - self.videoTrueGeometry.topLeft()
-        self.selectionWindow.endPos = clickPos
+        self.selectionWindow.endPos = a0.pos() - self.videoTrueGeometry.topLeft()
         self.selectionWindow.update()
 
     def mouseReleaseEvent(self, a0: Optional[QMouseEvent]) -> None:
@@ -1052,9 +1061,7 @@ class VideoPlayer(QMainWindow):
             return
 
         self.hasClickedVideo = False
-        if self.clickOnPreview is not None:
-            self.clickOnPreview = None
-            return
+        self.clickPreviewVec = None
 
         self.selectionWindow.update()
 
