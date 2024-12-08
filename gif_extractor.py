@@ -1,5 +1,7 @@
-# TODO: fix crash when too many interrupts
 # TODO: fix crash when window become too small (division by zero)
+# TODO: prevent sliding preview outside of video geometry
+# TODO: prevent quitting when gif has not been saved
+# TODO: modify keybinding `g` to extract
 # TODO: display ffmpeg progress bar
 # TODO: bind `?` to window that recap all keybindings
 
@@ -367,16 +369,17 @@ class Worker(QObject):
 
     def __init__(self, cmd: list[str]) -> None:
         super().__init__()
-
-        self.workerThread = QThread()
-
         self.process: Optional[Popen] = None
         self.cmd = cmd
+        self.interrupt = False
 
     def run(self) -> None:
         try:
-            self.process = Popen(self.cmd, stderr=DEVNULL)
+            self.process = Popen(self.cmd, stdout=DEVNULL, stderr=DEVNULL)
             self.process.wait()
+
+            if self.interrupt:
+                return
 
             if self.process.returncode == 0:
                 self.taskFinished.emit(WorkerStatus.SUCCESS, "")
@@ -391,6 +394,7 @@ class Worker(QObject):
 
     def stop(self) -> None:
         if self.process is not None:
+            self.interrupt = True
             self.process.terminate()
 
 
@@ -402,15 +406,13 @@ class WorkerRunner:
         self.callback = callback
 
     def interrupt(self) -> None:
-        if self.worker is None:
-            return
-
-        self.worker.stop()
-        self.thread.started.disconnect()
+        if self.worker is not None:
+            self.thread.started.disconnect()
+            self.worker.stop()
+            self.worker = None
 
         self.thread.quit()
         self.thread.wait()
-        self.worker = None
 
     def run(self, cmd: list[str]) -> None:
         self.interrupt()
@@ -873,7 +875,7 @@ class VideoPlayer(QMainWindow):
             if self.optimizationBox.isChecked():
                 self.gifOptimization()
             else:
-                self.statusLabel.setText("Conversion finished!")
+                self.statusLabel.setText("Gif extracted successfully!")
 
         elif status == WorkerStatus.FAILURE:
             self.statusLabel.setText("Something went wrong when converting file")
