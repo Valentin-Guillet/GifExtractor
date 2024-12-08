@@ -1,4 +1,3 @@
-# TODO: modify keybinding `g` to extract
 # TODO: display ffmpeg progress bar
 # TODO: don't reset selection rect and preview on resize but compute their new positions
 # TODO: bind `?` to window that recap all keybindings
@@ -936,6 +935,12 @@ class VideoPlayer(QMainWindow):
         if key == Qt.Key.Key_O and a0.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.openVideo()
 
+        elif (
+            key == Qt.Key.Key_S and a0.modifiers() & Qt.KeyboardModifier.ControlModifier
+            or key == Qt.Key.Key_X
+        ):
+            self.saveGif()
+
         elif key == Qt.Key.Key_L and a0.modifiers() & Qt.KeyboardModifier.ControlModifier:
             self.selectionWindow.clearSelection()
             self.startGifTime = None
@@ -944,7 +949,7 @@ class VideoPlayer(QMainWindow):
             self.setPreviewPos()
             self.previewWindow.hide()
 
-        elif key in {Qt.Key.Key_J, Qt.Key.Key_L}:
+        elif key in [Qt.Key.Key_J, Qt.Key.Key_L]:
             sign = 1 if key == Qt.Key.Key_L else -1
             if a0.modifiers() & Qt.KeyboardModifier.AltModifier:
                 delay = 100
@@ -986,9 +991,6 @@ class VideoPlayer(QMainWindow):
 
         elif key == Qt.Key.Key_D:
             self.gotoEndFrame()
-
-        elif key == Qt.Key.Key_G:
-            self.saveGif()
 
         elif key == Qt.Key.Key_P:
             self.previewEnabled = not self.previewEnabled
