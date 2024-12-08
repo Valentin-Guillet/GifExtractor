@@ -1001,6 +1001,8 @@ class VideoPlayer(QMainWindow):
         if a0 is None:
             return
 
+        self.optimizationField.clearFocus()
+
         if a0.button() == Qt.MouseButton.MiddleButton:
             self.selectionWindow.clearSelection()
             return
