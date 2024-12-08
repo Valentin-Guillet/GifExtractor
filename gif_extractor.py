@@ -1,4 +1,3 @@
-# TODO: remove DEVNULL to see what's happening (terminal needs reset)
 # TODO: prevent quitting when gif has not been saved
 # TODO: modify keybinding `g` to extract
 # TODO: display ffmpeg progress bar
@@ -1024,35 +1023,38 @@ class VideoPlayer(QMainWindow):
         if a0.button() != Qt.MouseButton.LeftButton:
             return
 
-        self.hasClickedVideo = True
+        # Click on preview window
         if self.previewWindow.isVisible() and self.previewRelGeometry.contains(a0.pos()):
             self.clickPreviewVec = self.previewRelGeometry.topLeft() - a0.pos()
             return
 
+        # Click outside of video widget
         if not self.videoTrueGeometry.contains(a0.pos()):
             return
 
-        clickPos = a0.pos() - self.videoTrueGeometry.topLeft()
-        self.selectionWindow.startPos = clickPos
+        self.hasClickedVideo = True
+        self.selectionWindow.startPos = a0.pos() - self.videoTrueGeometry.topLeft()
         self.selectionWindow.endPos = None
         self.selectionWindow.update()
-        self.previewWindow.hide()
 
     def mouseMoveEvent(self, a0: Optional[QMouseEvent]) -> None:
         super().mouseMoveEvent(a0)
-        if a0 is None or not self.hasClickedVideo:
+        if a0 is None:
             return
 
         # Move preview window
         if self.clickPreviewVec is not None and self.previewWindow.isVisible():
             self.previewAnchor = self.cropAnchor(a0.pos() + self.clickPreviewVec)
+            self.previewRelGeometry.moveTopLeft(self.previewAnchor)
             globalPos = self.videoWidget.mapToGlobal(self.previewAnchor)
             self.previewWindow.setGeometry(QRect(globalPos, self.previewRelGeometry.size()))
             return
 
-        if not self.videoTrueGeometry.contains(a0.pos()):
+        # Move outside of video widget
+        if not self.hasClickedVideo or not self.videoTrueGeometry.contains(a0.pos()):
             return
 
+        self.previewWindow.hide()
         self.selectionWindow.endPos = a0.pos() - self.videoTrueGeometry.topLeft()
         self.selectionWindow.update()
 
