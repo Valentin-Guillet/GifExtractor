@@ -1,8 +1,8 @@
-# TODO: manage selection rect when resizing
 # TODO: remove DEVNULL to see what's happening (terminal needs reset)
 # TODO: prevent quitting when gif has not been saved
 # TODO: modify keybinding `g` to extract
 # TODO: display ffmpeg progress bar
+# TODO: don't reset selection rect and preview on resize but compute their new positions
 # TODO: bind `?` to window that recap all keybindings
 
 """
@@ -627,6 +627,7 @@ class VideoPlayer(QMainWindow):
             return
 
         self.previewAnchor = None
+        self.selectionWindow.clearSelection()
         self.widgetWidth = self.videoWidget.width()
         self.widgetHeight = self.videoWidget.height()
         self.widgetAspectRatio = self.widgetWidth / self.widgetHeight
