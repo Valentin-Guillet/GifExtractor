@@ -1,4 +1,3 @@
-# TODO: fix crash when window become too small (division by zero)
 # TODO: prevent sliding preview outside of video geometry
 # TODO: prevent quitting when gif has not been saved
 # TODO: modify keybinding `g` to extract
@@ -81,6 +80,7 @@ from PyQt6.QtWidgets import (
 TMP_MP4_TRIM_FILE = Path("/tmp/gif_extractor_trimmed.mp4")
 TMP_PREVIEW_FILE = Path("/tmp/gif_extractor_preview.gif")
 TMP_OUTPUT_FILE = Path("/tmp/gif_extractor_output.gif")
+
 
 def parseArgs() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract GIFs from MP4 videos.")
@@ -246,6 +246,7 @@ class SelectionWindow(QWidget):
     Overlay widget to allow users to select a rectangular region for cropping.
     This widget draws a translucent rectangle to show the selected crop area.
     """
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -309,6 +310,7 @@ class PreviewWindow(QWidget):
     """
     Overlay widget to show a preview of the selected crop area.
     """
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -482,7 +484,8 @@ class VideoPlayer(QMainWindow):
         self.setCentralWidget(centralWidget)
 
         # Video display
-        self.videoWidget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        self.videoWidget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.videoWidget.setMinimumHeight(100)
         layout.addWidget(self.videoWidget)
 
         # Progress bar
