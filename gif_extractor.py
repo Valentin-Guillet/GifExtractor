@@ -1,4 +1,4 @@
-# TODO: display ffmpeg progress bar
+# TODO: prevent from saving previous GIF during optimization
 # TODO: don't reset selection rect and preview on resize but compute their new positions
 # TODO: bind `?` to window that recap all keybindings
 
@@ -26,7 +26,7 @@ import enum
 import shutil
 import sys
 from pathlib import Path
-from subprocess import DEVNULL, Popen
+from subprocess import DEVNULL, PIPE, Popen
 from typing import Callable, Optional, cast
 
 from PyQt6.QtCore import (
@@ -366,6 +366,7 @@ class WorkerStatus(enum.Enum):
 
 
 class Worker(QObject):
+    taskProgress = pyqtSignal(int, float)
     taskFinished = pyqtSignal(WorkerStatus, str)
 
     def __init__(self, cmd: list[str]) -> None:
@@ -376,8 +377,19 @@ class Worker(QObject):
 
     def run(self) -> None:
         try:
-            self.process = Popen(self.cmd, stdout=DEVNULL, stderr=DEVNULL)
-            self.process.wait()
+            if "-progress" in self.cmd:
+                self.process = Popen(self.cmd, stdout=PIPE, stderr=DEVNULL)
+                if self.process.stdout is not None:
+                    savedFrame = 0
+                    for data in iter(self.process.stdout.readline, b""):
+                        if data.startswith(b"frame="):
+                            savedFrame = int(data[6:])
+                        elif data.startswith(b"fps="):
+                            self.taskProgress.emit(savedFrame, float(data[4:]))
+                self.process.wait()
+            else:
+                self.process = Popen(self.cmd, stdout=DEVNULL, stderr=DEVNULL)
+                self.process.wait()
 
             if self.interrupt:
                 return
@@ -401,10 +413,15 @@ class Worker(QObject):
 
 class WorkerRunner:
 
-    def __init__(self, callback: Callable[[WorkerStatus, str], None]) -> None:
+    def __init__(
+        self,
+        callback: Callable[[WorkerStatus, str], None],
+        progressCallback: Optional[Callable[[int, float], None]] = None,
+    ) -> None:
         self.thread = QThread()
         self.worker: Optional[Worker] = None
         self.callback = callback
+        self.progressCallback = progressCallback
 
     def interrupt(self) -> None:
         if self.worker is not None:
@@ -424,6 +441,8 @@ class WorkerRunner:
         self.thread.started.connect(self.worker.run)
         self.worker.taskFinished.connect(self.callback)
         self.worker.taskFinished.connect(self.interrupt)
+        if self.progressCallback is not None:
+            self.worker.taskProgress.connect(self.progressCallback)
 
         if not self.thread.isRunning():
             self.thread.start()
@@ -452,7 +471,7 @@ class VideoPlayer(QMainWindow):
         self.gifOutputFile: Optional[str] = None
         self.trimWorker = WorkerRunner(self.onTrimFinished)
         self.previewWorker = WorkerRunner(self.onPreviewFinished)
-        self.conversionWorker = WorkerRunner(self.onConversionFinished)
+        self.conversionWorker = WorkerRunner(self.onConversionFinished, self.onConversionProgress)
         self.optimizationWorker = WorkerRunner(self.onOptimizationFinished)
 
         # Overlays for selection and preview
@@ -558,7 +577,7 @@ class VideoPlayer(QMainWindow):
 
         self.optimizationField = QSpinBox(self)
         self.optimizationField.setRange(5, 200)
-        self.optimizationField.setValue(20)
+        self.optimizationField.setValue(80)
         controlLayout.addWidget(self.optimizationField)
 
         self.statusLabel = QLabel(self)
@@ -810,6 +829,9 @@ class VideoPlayer(QMainWindow):
         clipLength = self.endGifTime - self.startGifTime
         lengthStr = f"{format_time(clipLength // 1000)}.{clipLength % 1000}"
 
+        # Nb frames = 30fps * clipLength (in s)
+        self.clipNbFrames = 30 * clipLength // 1000
+
         trimCmd = ["ffmpeg", "-y", "-an", "-ss", startTimeStr, "-t", lengthStr,
                    "-i", filePath, "-c", "copy", str(TMP_MP4_TRIM_FILE)]
         self.trimWorker.run(trimCmd)
@@ -841,8 +863,8 @@ class VideoPlayer(QMainWindow):
             " [s1] fifo [s1] ; [s1] [pal] paletteuse=dither=bayer"
         )
 
-        conversionCmd = ["ffmpeg", "-y", "-i", str(TMP_MP4_TRIM_FILE),
-                         "-vf", filterStr, str(TMP_OUTPUT_FILE)]
+        conversionCmd = ["ffmpeg", "-y", "-v", "quiet", "-progress", "pipe:1",
+                         "-i", str(TMP_MP4_TRIM_FILE), "-vf", filterStr, str(TMP_OUTPUT_FILE)]
         self.extractionRunning = True
         self.conversionWorker.run(conversionCmd)
 
@@ -854,7 +876,7 @@ class VideoPlayer(QMainWindow):
             self.statusLabel.setText("Executable `gifsicle` not found!")
             return
 
-        self.statusLabel.setText("Optimizing GIF...")
+        self.statusLabel.setText("Optimizing GIF, this can take a while...")
         optimizationCmd = ["gifsicle", "-O3", f"--lossy={self.optimizationField.value()}",
                            "-o", str(TMP_OUTPUT_FILE), str(TMP_OUTPUT_FILE)]
         self.optimizationWorker.run(optimizationCmd)
@@ -877,6 +899,16 @@ class VideoPlayer(QMainWindow):
         if status == WorkerStatus.SUCCESS:
             self.previewWindow.loadGif(str(TMP_PREVIEW_FILE))
             self.setPreviewPos()
+
+    def onConversionProgress(self, frame: int, fps: float) -> None:
+        try:
+            progressPercent = min(100, 100 * frame // self.clipNbFrames)
+            progressETA = int((self.clipNbFrames - frame) / fps)
+        except ZeroDivisionError:
+            progressPercent = "-"
+            progressETA = 0
+        progressMsg = f"Conversion: {progressPercent}%, ETA: {format_time(progressETA)}"
+        self.statusLabel.setText(progressMsg)
 
     def onConversionFinished(self, status: WorkerStatus, msg: str) -> None:
         if status == WorkerStatus.SUCCESS:
