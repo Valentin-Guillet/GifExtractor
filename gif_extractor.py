@@ -1,5 +1,5 @@
 # TODO: don't reset selection rect and preview on resize but compute their new positions
-# TODO: bind `?` to window that recap all keybindings
+# TODO: write README
 
 """
 GIF Extractor - Extract GIFs from MP4 Videos
@@ -411,7 +411,6 @@ class Worker(QObject):
 
 
 class WorkerRunner:
-
     def __init__(
         self,
         callback: Callable[[WorkerStatus, str], None],
@@ -449,6 +448,14 @@ class WorkerRunner:
     def close(self) -> None:
         self.interrupt()
         self.thread.deleteLater()
+
+
+class HelpBox(QMessageBox):
+    def keyPressEvent(self, a0: Optional[QKeyEvent]) -> None:
+        if a0 is not None and a0.key() == Qt.Key.Key_Question:
+            self.close()
+        else:
+            super().keyPressEvent(a0)
 
 
 class VideoPlayer(QMainWindow):
@@ -629,7 +636,10 @@ class VideoPlayer(QMainWindow):
         if self.previewAnchor is not None:
             topLeftPos = self.previewAnchor
         else:
-            topLeftPos = QPoint(self.videoTrueGeometry.right() - previewWidth, self.videoTrueGeometry.top())
+            topLeftPos = QPoint(
+                self.videoTrueGeometry.right() - previewWidth,
+                self.videoTrueGeometry.top(),
+            )
 
         self.previewRelGeometry = QRect(topLeftPos, QSize(previewWidth, previewHeight))
         globalPos = self.videoWidget.mapToGlobal(topLeftPos)
@@ -1037,6 +1047,9 @@ class VideoPlayer(QMainWindow):
         elif key == Qt.Key.Key_Q:
             self.closeWithConfirm()
 
+        elif key == Qt.Key.Key_Question:
+            self.showHelp()
+
     def cropAnchor(self, anchor: QPoint) -> QPoint:
         vx = self.videoWidget.geometry().width()
         dx = self.previewRelGeometry.width()
@@ -1143,6 +1156,38 @@ class VideoPlayer(QMainWindow):
         TMP_OUTPUT_FILE.unlink(missing_ok=True)
 
         super().closeEvent(a0)
+
+    def showHelp(self) -> None:
+        """Display a help box with keybindings."""
+        helpBox = HelpBox(self)
+        helpBox.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+        helpBox.setText(
+            "<b>Hotkeys:</b><br>"
+            "<b>&lt;C-O></b>: Open video<br>"
+            "<b>&lt;C-S></b> OR <b>x</b>: Save clip<br>"
+            "<b>Space</b> OR <b>K</b>: Play/pause<br>"
+            "<b>, </b>: Previous frame<br>"
+            "<b>. </b>: Next frame<br>"
+            "<b>> </b>: Increase playback speed<br>"
+            "<b>&lt; </b>: Decrease playback speed<br>"
+            "<b>L / J</b>: Go +/-3s<br>"
+            "<b>&lt;C-L> / &lt;C-J></b>: Go +/-1s<br>"
+            "<b>&lt;M-L> / &lt;M-J></b>: Go +/-0.1s<br>"
+            "<b>[n]</b>: Go to [n]% of the video<br>"
+            "<b>S</b>: Mark start frame<br>"
+            "<b>E</b>: Mark end frame<br>"
+            "<b>A</b>: Go to start frame<br>"
+            "<b>D</b>: Go to end frame<br>"
+            "<b>C</b>: Clear selection<br>"
+            "<b>P</b>: Toggle preview<br>"
+            "<b>R</b>: Reset preview<br>"
+            "<b>&lt;C-l></b>: Clear selection and preview<br>"
+            "<b>Q</b>: Quit<br>"
+            "<b>Escape</b>: Stop playback<br>"
+            "<b>?</b>: Toggle this help<br>"
+        )
+        helpBox.exec()
+        self.activateWindow()  # Ensure main window regains focus
 
 
 if __name__ == "__main__":
