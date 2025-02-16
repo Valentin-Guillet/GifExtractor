@@ -23,6 +23,7 @@ Args:
 
 import argparse
 import enum
+import os
 import shutil
 import sys
 from pathlib import Path
@@ -1157,6 +1158,7 @@ class VideoPlayer(QMainWindow):
         TMP_PREVIEW_FILE.unlink(missing_ok=True)
         TMP_OUTPUT_FILE.unlink(missing_ok=True)
 
+        os.system("stty sane")
         super().closeEvent(a0)
 
     def showHelp(self) -> None:
