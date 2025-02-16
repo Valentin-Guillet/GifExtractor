@@ -1,4 +1,5 @@
-# TODO: don't reset selection rect and preview on resize but compute their new positions
+#!/usr/bin/env python3
+
 # TODO: write README
 
 """
