@@ -989,8 +989,10 @@ class VideoPlayer(QMainWindow):
             self.selectionWindow.clearSelection()
             self.startGifTime = None
             self.endGifTime = None
+            self.progressSlider.clearTicks()
             self.previewAnchor = None
             self.setPreviewPos()
+            self.previewWindow.stop()
             self.previewWindow.hide()
 
         elif key in [Qt.Key.Key_J, Qt.Key.Key_L, Qt.Key.Key_Left, Qt.Key.Key_Right]:
