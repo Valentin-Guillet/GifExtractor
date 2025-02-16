@@ -958,7 +958,7 @@ class VideoPlayer(QMainWindow):
             self.statusLabel.setText("No clip selected!")
             return
 
-        filePath, _ = QFileDialog.getSaveFileName(self, "Save File", "", "Gif Files (*.gif)")
+        filePath, _ = QFileDialog.getSaveFileName(self, "Save File", "output/", "Gif Files (*.gif)")
         if not filePath:
             return
 
