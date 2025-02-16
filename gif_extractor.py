@@ -505,6 +505,7 @@ class VideoPlayer(QMainWindow):
         centralWidget = QWidget(self)
         layout = QVBoxLayout()
         centralWidget.setLayout(layout)
+        centralWidget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setCentralWidget(centralWidget)
 
         # Video display
@@ -990,8 +991,8 @@ class VideoPlayer(QMainWindow):
             self.setPreviewPos()
             self.previewWindow.hide()
 
-        elif key in [Qt.Key.Key_J, Qt.Key.Key_L]:
-            sign = 1 if key == Qt.Key.Key_L else -1
+        elif key in [Qt.Key.Key_J, Qt.Key.Key_L, Qt.Key.Key_Left, Qt.Key.Key_Right]:
+            sign = 1 if key == Qt.Key.Key_L or key == Qt.Key.Key_Right else -1
             if a0.modifiers() & Qt.KeyboardModifier.AltModifier:
                 delay = 100
             elif a0.modifiers() & Qt.KeyboardModifier.ShiftModifier:
@@ -1164,15 +1165,18 @@ class VideoPlayer(QMainWindow):
         helpBox.setText(
             "<b>Hotkeys:</b><br>"
             "<b>&lt;C-O></b>: Open video<br>"
-            "<b>&lt;C-S></b> OR <b>x</b>: Save clip<br>"
-            "<b>Space</b> OR <b>K</b>: Play/pause<br>"
+            "<b>&lt;C-S></b> / <b>X</b>: Save clip<br>"
+            "<b>Space</b> / <b>K</b>: Play/pause<br>"
             "<b>, </b>: Previous frame<br>"
             "<b>. </b>: Next frame<br>"
             "<b>> </b>: Increase playback speed<br>"
             "<b>&lt; </b>: Decrease playback speed<br>"
-            "<b>L / J</b>: Go +/-3s<br>"
-            "<b>&lt;C-L> / &lt;C-J></b>: Go +/-1s<br>"
-            "<b>&lt;M-L> / &lt;M-J></b>: Go +/-0.1s<br>"
+            "<b>L</b> / <b>Right</b>: Go +3s<br>"
+            "<b>J</b> / <b>Left</b>: Go -3s<br>"
+            "<b>&lt;C-L></b> / <b>&lt;C-Right></b>: Go +1s<br>"
+            "<b>&lt;C-J></b> / <b>&lt;C-Left></b>: Go -1s<br>"
+            "<b>&lt;M-L></b> / <b>&lt;M-Right></b>: Go +0.1s<br>"
+            "<b>&lt;M-J></b> / <b>&lt;M-Left></b>: Go -0.1s<br>"
             "<b>[n]</b>: Go to [n]% of the video<br>"
             "<b>S</b>: Mark start frame<br>"
             "<b>E</b>: Mark end frame<br>"
