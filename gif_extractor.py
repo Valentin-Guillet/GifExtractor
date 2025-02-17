@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 
-# TODO: write README
-
 """
 GIF Extractor - Extract GIFs from MP4 Videos
 
