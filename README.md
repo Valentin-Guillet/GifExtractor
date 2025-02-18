@@ -2,6 +2,8 @@
 
 GIF Extractor is a GUI application that allows users to extract GIFs from MP4 videos easily. It provides an intuitive interface for selecting a crop region, marking start and end frames, and exporting the selected clip as a GIF using FFmpeg.
 
+![Preview](./preview.png)
+
 ## Features
 
 - Video playback with seeking and playback speed adjustments.
